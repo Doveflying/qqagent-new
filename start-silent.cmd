@@ -17,7 +17,7 @@ start "" /min cmd /c "scripts\model-schedule-loop.cmd"
 REM If NapCat is not logged in, run the repair flow visibly (it needs the QR scan).
 REM The agent reconnects on its own once the login completes.
 netstat -ano | findstr ":3001 " | findstr "LISTENING" >nul
-if errorlevel 1 start "" cmd /c "????.cmd"
+if errorlevel 1 start "" cmd /c "%~dp0repair-login.cmd"
 
 start "" /min cmd /c "scripts\open-panel.cmd"
 
