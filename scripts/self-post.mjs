@@ -204,30 +204,67 @@ async function main() {
   log(`内容（${text.length} 字）：${text}`);
   if (DRY) { log('--dry，不发送'); return; }
 
-  try {
-    if (cfg.target?.qzone !== false) {
-      const r = await callOneBot(cfg.napcat?.url ?? 'ws://127.0.0.1:3001', 'send_qzone_msg', {
+  const url = cfg.napcat?.url ?? 'ws://127.0.0.1:3001';
+  let delivered = 0;
+  let lastError = null;
+
+  if (cfg.target?.qzone !== false) {
+    try {
+      const r = await callOneBot(url, 'send_qzone_msg', {
         content: text,
         ugc_right: Number(cfg.target?.ugcRight ?? 1),
       }, 60000);
       log(`已发 QQ 空间，tid=${r?.tid ?? '?'}`);
+      delivered++;
+    } catch (e) {
+      lastError = e;
+      log(`QQ 空间发送失败：${e?.message ?? e}`);
+      // NapCat 在部分登录方式下拿不到空间需要的客户端密钥（getClientKey Error），
+      // 此时退化成私聊发送，至少让这条动态真的被送到人手上。
+      const users = cfg.target?.users ?? [];
+      if (cfg.target?.fallbackToUsers !== false && users.length > 0) {
+        log(`改用私聊发送（${users.length} 个目标）…`);
+        for (const u of users) {
+          const uid = Number(u);
+          if (!Number.isSafeInteger(uid) || uid <= 0) continue;
+          try {
+            await callOneBot(url, 'send_private_msg', {
+              user_id: uid,
+              message: [{ type: 'text', data: { text } }],
+            }, 30000);
+            log(`已私聊发送给 ${uid}`);
+            delivered++;
+          } catch (e2) {
+            lastError = e2;
+            log(`私聊 ${uid} 失败：${e2?.message ?? e2}`);
+          }
+        }
+      }
     }
+  }
 
-    for (const group of cfg.target?.groups ?? []) {
-      const gid = Number(group);
-      if (!Number.isSafeInteger(gid) || gid <= 0) continue;
-      await callOneBot(cfg.napcat?.url ?? 'ws://127.0.0.1:3001', 'send_group_msg', {
+  for (const group of cfg.target?.groups ?? []) {
+    const gid = Number(group);
+    if (!Number.isSafeInteger(gid) || gid <= 0) continue;
+    try {
+      await callOneBot(url, 'send_group_msg', {
         group_id: gid,
         message: [{ type: 'text', data: { text } }],
       }, 30000);
       log(`已发群 ${gid}`);
+      delivered++;
+    } catch (e) {
+      lastError = e;
+      log(`群 ${gid} 发送失败：${e?.message ?? e}`);
     }
-  } catch (e) {
+  }
+
+  if (delivered === 0) {
     // 记下失败，避免每 10 分钟重新生成一遍内容
     state.lastAttemptAt = now;
     state.failCount = Number(state.failCount ?? 0) + 1;
     writeJson(STATE_PATH, state);
-    throw e;
+    throw lastError ?? new Error('没有任何目标发送成功');
   }
 
   state.count = Number(state.count ?? 0) + 1;
