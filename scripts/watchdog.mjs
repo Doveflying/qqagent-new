@@ -33,8 +33,15 @@ function logLine(msg) {
   try { fs.appendFileSync(LOG_PATH, `${line}\n`, 'utf8'); } catch {}
 }
 
-/** 询问 NapCat：返回 { online, login } 或 { error }。 */
-function probe(url, timeoutMs = 8000) {
+/**
+ * 询问 NapCat：返回 { online, login, bkn } 或 { error }。
+ *
+ * 关键：get_status.online 会说谎。内核会话失效时它仍返回 true，
+ * 但此时 QQ 空间、发送消息都会报 1006514「网络连接异常」。
+ * 真正可靠的是 get_cookies 拿到的 bkn —— 会话活着才有值，失效时为空串。
+ * 这个探测没有任何副作用，不会发消息、不会打接口。
+ */
+function probe(url, timeoutMs = 12000) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -42,10 +49,11 @@ function probe(url, timeoutMs = 8000) {
     try { ws = new WebSocket(url); } catch (e) { return done({ error: String(e?.message ?? e) }); }
     const timer = setTimeout(() => { try { ws.close(); } catch {} done({ error: 'timeout' }); }, timeoutMs);
 
-    const out = {};
+    const out = { bkn: null };
     let got = 0;
+    const total = 3;
     const collect = () => {
-      if (++got < 2) return;
+      if (++got < total) return;
       clearTimeout(timer);
       try { ws.close(); } catch {}
       done(out);
@@ -54,12 +62,19 @@ function probe(url, timeoutMs = 8000) {
     ws.onopen = () => {
       ws.send(JSON.stringify({ action: 'get_login_info', params: {}, echo: 'login' }));
       ws.send(JSON.stringify({ action: 'get_status', params: {}, echo: 'status' }));
+      ws.send(JSON.stringify({ action: 'get_cookies', params: { domain: 'qzone.qq.com' }, echo: 'cookies' }));
     };
     ws.onmessage = (ev) => {
       let d;
       try { d = JSON.parse(ev.data); } catch { return; }
+      // 必须先按 echo 过滤：NapCat 会先推 meta_event(lifecycle)，那不是回复。
       if (d.echo === 'login') { out.login = d.data ?? d.message; collect(); }
-      if (d.echo === 'status') { out.status = d.data ?? d.message; collect(); }
+      else if (d.echo === 'status') { out.status = d.data ?? d.message; collect(); }
+      else if (d.echo === 'cookies') {
+        const bkn = d.data?.bkn;
+        out.bkn = typeof bkn === 'string' ? bkn : '';
+        collect();
+      }
     };
     ws.onerror = () => { clearTimeout(timer); done({ error: 'connect-failed' }); };
   });
@@ -92,15 +107,23 @@ async function main() {
 
   let status;      // 'online' | 'offline' | 'down'
   let detail = '';
+  const uid = result.login?.user_id ?? '?';
+  const bkn = result.bkn;
+
   if (result.error) {
     status = 'down';
     detail = `NapCat 无法连接（${result.error}）`;
-  } else if (result.status?.online === true) {
+  } else if (result.status?.online === true && typeof bkn === 'string' && bkn !== '') {
     status = 'online';
-    detail = `账号 ${result.login?.user_id ?? '?'} 在线`;
+    detail = `账号 ${uid} 在线（bkn 正常）`;
+  } else if (result.status?.online === true) {
+    // 经典假在线：online=true，但会话密钥（bkn）为空。
+    // 此时能查账号信息，但发消息会报 1006514「网络连接异常」。
+    status = 'offline';
+    detail = `账号 ${uid} 假在线：online=true 但 bkn 为空，消息发不出去，需要重新登录`;
   } else {
     status = 'offline';
-    detail = `账号 ${result.login?.user_id ?? '?'} 已断线（online=false），进程和端口仍正常`;
+    detail = `账号 ${uid} 已断线（online=false），进程和端口仍正常`;
   }
 
   // 连续计数：只有 offline 才累加，其余清零
