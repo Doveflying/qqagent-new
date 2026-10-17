@@ -23,7 +23,18 @@ if not exist "%NAPCAT%" (
 )
 
 echo [i] NapCat is not running. Starting it...
-start "NapCat" cmd /c ""%NAPCAT%""
+REM Prefer the hidden .vbs launcher: it detaches from any console, so closing a
+REM window does not take the QQ session down with it (that is what run-napcat.bat
+REM does). Falls back to the .bat when no .vbs exists.
+set "VBS="
+for %%I in ("%NAPCAT%") do set "VBS=%%~dpIheadless-napcat.vbs"
+if not exist "%VBS%" set "VBS=C:\napcat\headless-napcat.vbs"
+if exist "%VBS%" (
+  echo [i] Using hidden launcher: %VBS%
+  start "" wscript.exe "%VBS%"
+) else (
+  start "NapCat" cmd /c ""%NAPCAT%""
+)
 
 call :wait 90
 if not errorlevel 1 (

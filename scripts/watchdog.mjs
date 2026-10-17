@@ -65,14 +65,14 @@ function probe(url, timeoutMs = 8000) {
   });
 }
 
-async function agentAlive(url) {
+async function agentState(url) {
   try {
     const r = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) });
-    if (!r.ok) return false;
+    if (!r.ok) return { reachable: true, onebot: false };
     const doc = await r.json();
-    return doc?.runtime?.onebot?.connected === true;
+    return { reachable: true, onebot: doc?.runtime?.onebot?.connected === true };
   } catch {
-    return false;
+    return { reachable: false, onebot: false };
   }
 }
 
@@ -87,7 +87,8 @@ async function main() {
   const state = readJson(STATE_PATH, { consecutiveOffline: 0, lastState: '' }) ?? {};
 
   const result = await probe(cfg.onebotUrl);
-  const agentOk = await agentAlive(cfg.agentUrl);
+  const agent = await agentState(cfg.agentUrl);
+  const agentLabel = agent.reachable ? (agent.onebot ? 'ok' : 'onebot-down') : 'DOWN';
 
   let status;      // 'online' | 'offline' | 'down'
   let detail = '';
@@ -107,11 +108,13 @@ async function main() {
 
   const changed = state.lastState !== status;
   if (changed || VERBOSE) {
-    logLine(`${status.toUpperCase()} ${detail} | agent=${agentOk ? 'ok' : 'DOWN'} | 连续断线=${state.consecutiveOffline}`);
+    logLine(`${status.toUpperCase()} ${detail} | agent=${agentLabel} | 连续断线=${state.consecutiveOffline}`);
   }
 
-  if (status !== 'online' && !agentOk) {
-    logLine('提示：Agent 没有在运行，双击桌面的 QQ Agent 启动');
+  if (!agent.reachable) {
+    logLine('提示：Agent 进程不在（/api/health 无响应），双击桌面的 QQ Agent 启动');
+  } else if (!agent.onebot) {
+    logLine('提示：Agent 在运行但没连上 OneBot，等 NapCat 恢复后它会自动重连');
   }
 
   const threshold = Number(cfg.offlineThreshold ?? 3);
