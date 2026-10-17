@@ -87,19 +87,20 @@ namespace QQAgent
             var ops = new GroupBox { Text = "操作", Location = new Point(16, 270), Size = new Size(438, 104) };
             Controls.Add(ops);
 
-            ops.Controls.Add(MakeButton("启动全部", 14, 22, delegate { RunCmd("start-all.cmd"); }));
-            ops.Controls.Add(MakeButton("停止全部", 122, 22, delegate { RunCmd("stop-all.cmd"); }));
-            ops.Controls.Add(MakeButton("管理面板", 230, 22, delegate
+            ops.Controls.Add(MakeButton("启动全部", 12, 22, delegate { RunCmd("start-all.cmd"); }));
+            ops.Controls.Add(MakeButton("停止全部", 120, 22, delegate { RunCmd("stop-all.cmd"); }));
+            ops.Controls.Add(MakeButton("管理面板", 228, 22, delegate
             {
                 if (!TestPort(3081)) { MessageBox.Show(this, "Agent 没在运行，先点\"启动全部\"。", "QQ Agent"); return; }
                 try { Process.Start("http://127.0.0.1:3081"); } catch { }
             }));
-            ops.Controls.Add(MakeButton("修复登录", 338, 22, delegate { RunCmd("repair-login.cmd"); }));
-            ops.Controls.Add(MakeButton("打开日志", 14, 60, delegate
+            ops.Controls.Add(MakeButton("修复登录", 336, 22, delegate { RunCmd("repair-login.cmd"); }));
+            ops.Controls.Add(MakeButton("强制重登", 12, 60, delegate { RunCmd("repair-login.cmd", "force"); }));
+            ops.Controls.Add(MakeButton("打开日志", 120, 60, delegate
             {
                 try { Process.Start("explorer.exe", Path.Combine(_repo, "logs")); } catch { }
             }));
-            ops.Controls.Add(MakeButton("刷新", 122, 60, delegate { UpdateStatus(); }));
+            ops.Controls.Add(MakeButton("刷新", 228, 60, delegate { UpdateStatus(); }));
 
             var footer = new Label
             {
@@ -141,7 +142,7 @@ namespace QQAgent
             return @"C:\桌面图标\qwe\QQagent";
         }
 
-        private void RunCmd(string fileName)
+        private void RunCmd(string fileName, string extraArgs = "")
         {
             string full = Path.Combine(_repo, fileName);
             if (!File.Exists(full))
@@ -151,7 +152,7 @@ namespace QQAgent
             }
             try
             {
-                Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + full + "\"")
+                Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + full + "\" " + extraArgs)
                 {
                     WorkingDirectory = _repo,
                     UseShellExecute = true,
