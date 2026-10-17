@@ -180,6 +180,14 @@ async function main() {
 
   if (!FORCE) {
     if (Number(state.count ?? 0) >= perDay) { log(`今天已发 ${state.count} 条，达到上限 ${perDay}`); return; }
+    if (Number(state.failCount ?? 0) >= 3) { log('今天失败已 3 次，不再重试'); return; }
+    // 失败后别每 10 分钟重来一遍：至少等 30 分钟，且每次都会重新生成内容，
+    // 反复重试只会白烧 token。
+    if (state.lastAttemptAt && now - state.lastAttemptAt < 30 * 60 * 1000) {
+      const left = Math.ceil((30 * 60 * 1000 - (now - state.lastAttemptAt)) / 60000);
+      log(`上次尝试失败，${left} 分钟后才会再试`);
+      return;
+    }
     if (state.lastAt && now - state.lastAt < minGapMs) {
       const left = Math.ceil((minGapMs - (now - state.lastAt)) / 3600000);
       log(`距上次发布不足 ${limits.minGapHours} 小时，还剩约 ${left} 小时`);
@@ -196,26 +204,35 @@ async function main() {
   log(`内容（${text.length} 字）：${text}`);
   if (DRY) { log('--dry，不发送'); return; }
 
-  if (cfg.target?.qzone !== false) {
-    const r = await callOneBot(cfg.napcat?.url ?? 'ws://127.0.0.1:3001', 'send_qzone_msg', {
-      content: text,
-      ugc_right: Number(cfg.target?.ugcRight ?? 1),
-    });
-    log(`已发 QQ 空间，tid=${r?.tid ?? '?'}`);
-  }
+  try {
+    if (cfg.target?.qzone !== false) {
+      const r = await callOneBot(cfg.napcat?.url ?? 'ws://127.0.0.1:3001', 'send_qzone_msg', {
+        content: text,
+        ugc_right: Number(cfg.target?.ugcRight ?? 1),
+      }, 60000);
+      log(`已发 QQ 空间，tid=${r?.tid ?? '?'}`);
+    }
 
-  for (const group of cfg.target?.groups ?? []) {
-    const gid = Number(group);
-    if (!Number.isSafeInteger(gid) || gid <= 0) continue;
-    await callOneBot(cfg.napcat?.url ?? 'ws://127.0.0.1:3001', 'send_group_msg', {
-      group_id: gid,
-      message: [{ type: 'text', data: { text } }],
-    });
-    log(`已发群 ${gid}`);
+    for (const group of cfg.target?.groups ?? []) {
+      const gid = Number(group);
+      if (!Number.isSafeInteger(gid) || gid <= 0) continue;
+      await callOneBot(cfg.napcat?.url ?? 'ws://127.0.0.1:3001', 'send_group_msg', {
+        group_id: gid,
+        message: [{ type: 'text', data: { text } }],
+      }, 30000);
+      log(`已发群 ${gid}`);
+    }
+  } catch (e) {
+    // 记下失败，避免每 10 分钟重新生成一遍内容
+    state.lastAttemptAt = now;
+    state.failCount = Number(state.failCount ?? 0) + 1;
+    writeJson(STATE_PATH, state);
+    throw e;
   }
 
   state.count = Number(state.count ?? 0) + 1;
   state.lastAt = now;
+  state.failCount = 0;
   writeJson(STATE_PATH, state);
   log(`完成，今天第 ${state.count} 条`);
 }
