@@ -11,10 +11,10 @@
 
                               ],
                    "users":  [
-                                 2731758714
+
                              ],
                    "fallbackToUsers":  true,
-                   "note":  "优先发 QQ 空间（ugc_right=1 所有好友可见，想只给自己看改 64）；空间失败时自动改发私聊 users。前提：会话健康（bkn 非空），假在线时必然失败。"
+                   "note":  "优先发 QQ 空间；私聊目标请写在 config/self-post.local.json（已被 .gitignore 排除），不要写在这里。"
                },
     "limits":  {
                    "perDay":  1,

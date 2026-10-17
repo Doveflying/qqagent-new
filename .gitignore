@@ -50,3 +50,6 @@ docs/*-test-first-failure.txt
 !docs/token-budgets.md
 !docs/log-diagnostics.md
 !docs/voicestudio-setup.md
+
+# 自发动态的本地覆盖（含个人 QQ 号），不进仓库
+config/self-post.local.json
