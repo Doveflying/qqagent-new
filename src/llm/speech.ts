@@ -262,6 +262,16 @@ export class SpeechService {
             if (bytes.length * 4 / 3 + 2048 > config.napcat.maxBufferedBytes)
                 throw Error('语音超过OneBot发送缓冲上限，保留文字');
             await api.sendToScope(msg.scope, [{ type: 'record', data: { file: 'base64://' + bytes.toString('base64') } }], { throwOnError: true });
+            // 成功路径以前什么都不打，导致事后分不清"没发语音"和"发了但没记录"。
+            this.log.info({
+                scope: msg.scope,
+                persona: persona.id,
+                voice: persona.voice.voice || 'default',
+                mode: config.speech.tts.mode,
+                format: config.speech.tts.format,
+                bytes: bytes.length,
+                chars: text.length,
+            }, '🔊 语音已发送');
             return true;
         }
         catch (e) {
