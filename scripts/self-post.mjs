@@ -207,6 +207,7 @@ async function main() {
   const url = cfg.napcat?.url ?? 'ws://127.0.0.1:3001';
   let delivered = 0;
   let lastError = null;
+  let qzoneFailed = false;
 
   if (cfg.target?.qzone !== false) {
     try {
@@ -218,27 +219,29 @@ async function main() {
       delivered++;
     } catch (e) {
       lastError = e;
+      qzoneFailed = true;
       log(`QQ 空间发送失败：${e?.message ?? e}`);
-      // NapCat 在部分登录方式下拿不到空间需要的客户端密钥（getClientKey Error），
-      // 此时退化成私聊发送，至少让这条动态真的被送到人手上。
-      const users = cfg.target?.users ?? [];
-      if (cfg.target?.fallbackToUsers !== false && users.length > 0) {
-        log(`改用私聊发送（${users.length} 个目标）…`);
-        for (const u of users) {
-          const uid = Number(u);
-          if (!Number.isSafeInteger(uid) || uid <= 0) continue;
-          try {
-            await callOneBot(url, 'send_private_msg', {
-              user_id: uid,
-              message: [{ type: 'text', data: { text } }],
-            }, 30000);
-            log(`已私聊发送给 ${uid}`);
-            delivered++;
-          } catch (e2) {
-            lastError = e2;
-            log(`私聊 ${uid} 失败：${e2?.message ?? e2}`);
-          }
-        }
+    }
+  }
+
+  // 空间关闭（qzone=false）或发送失败时，改走私聊。
+  // 注意：这段必须独立于上面的 try，否则关掉空间后私聊也不会执行。
+  const users = cfg.target?.users ?? [];
+  if ((cfg.target?.qzone === false || qzoneFailed) && cfg.target?.fallbackToUsers !== false && users.length > 0) {
+    log(`通过私聊发送（${users.length} 个目标）…`);
+    for (const u of users) {
+      const uid = Number(u);
+      if (!Number.isSafeInteger(uid) || uid <= 0) continue;
+      try {
+        await callOneBot(url, 'send_private_msg', {
+          user_id: uid,
+          message: [{ type: 'text', data: { text } }],
+        }, 30000);
+        log(`已私聊发送给 ${uid}`);
+        delivered++;
+      } catch (e2) {
+        lastError = e2;
+        log(`私聊 ${uid} 失败：${e2?.message ?? e2}`);
       }
     }
   }
