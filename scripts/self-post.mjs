@@ -159,6 +159,17 @@ function callOneBot(url, action, params, timeoutMs = 20000) {
 async function main() {
   const cfg = readJson(CFG_PATH);
   if (!cfg) fail(`读不到配置 ${CFG_PATH}`);
+
+  // 本地覆盖：config/self-post.local.json（.gitignore 排除）里的 target/limits/style
+  // 会覆盖主配置，用来存放私聊目标 QQ 这类个人信息。
+  const localCfg = readJson(path.join(REPO, 'config', 'self-post.local.json'));
+  if (localCfg && typeof localCfg === 'object') {
+    cfg.target = Object.assign({}, cfg.target, localCfg.target || {});
+    if (localCfg.limits) cfg.limits = Object.assign({}, cfg.limits, localCfg.limits);
+    if (localCfg.style) cfg.style = Object.assign({}, cfg.style, localCfg.style);
+    log('已加载 config/self-post.local.json 覆盖');
+  }
+
   if (!cfg.enabled && !FORCE) { log('已关闭（self-post.json 里 enabled=false）'); return; }
 
   const now = Date.now();
