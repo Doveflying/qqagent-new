@@ -13,6 +13,8 @@ export const COMMAND_DEFINITIONS: Array<{id:CommandId; aliases:string[]; name:st
  {id:'reminders',aliases:['/reminders','/提醒列表'],name:'提醒列表',description:'查看自己在本会话的定时提醒'},
  {id:'cancelremind',aliases:['/cancelremind','/取消提醒'],name:'取消提醒',description:'取消自己在本会话的待执行提醒'},
  {id:'daily',aliases:['/daily','/日报'],name:'群聊日报',description:'总结本群24小时记录，或配置每日定时日报'},
+ {id:'voice',aliases:['/voice','/音色'],name:'音色',description:'列出可用语音音色，或切换成指定音色'},
+ {id:'lang',aliases:['/lang','/语言'],name:'语言',description:'设置语音朗读使用的语言，或关闭转换'},
 ];
 export function parseCommand(text:string): {id:CommandId;arg:string} | null {
  const match=/^(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());

@@ -42,7 +42,11 @@ function formatValue(v: unknown): string {
   const s = String(v);
   if (s === '') return '""';
   // 简单 token 直接裸写，保持配置文件整洁
-  if (/^[A-Za-z0-9_./@+-]+$/.test(s) && !/^(true|false|null|yes|no|on|off|~)$/i.test(s)) return s;
+  // 但必须排除 YAML 会解析成其它类型（数字/布尔/null）的写法，
+  // 否则像 398e3278、123、.5、1e5 这样的字符串会在重新读取时变成数字，
+  // 溢出后甚至是 Infinity，导致 schema 校验失败。
+  const yamlAmbiguous = /^[-+]?(\d|\.\d)/.test(s) || /^(true|false|null|yes|no|on|off|~|inf|nan|[-+]?(\.inf|\.nan))$/i.test(s);
+  if (/^[A-Za-z0-9_./@+-]+$/.test(s) && !yamlAmbiguous) return s;
   return JSON.stringify(s);
 }
 

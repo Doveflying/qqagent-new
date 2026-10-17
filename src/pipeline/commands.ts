@@ -18,6 +18,9 @@ import { EMOTION_LABELS_CN } from '../emotion/analyzer.js';
 import { FACT_TYPE_CN } from '../memory/extractor.js';
 import { parseCommand, authorizeCommand } from './command-permissions.js';
 import {naturalReminder,parseReminder,type ScheduledTasks} from '../tasks/scheduled.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export interface CommandContext {
   scope: string;
@@ -91,11 +94,131 @@ export class CommandHandler {
       case '/stats':
       case '/统计':
         return { handled: true, reply: this.stats() };
+      case '/voice':
+      case '/音色':
+        return { handled: true, reply: await this.handleVoice(full) };
+      case '/lang':
+      case '/语言':
+        return { handled: true, reply: this.handleLang(full) };
       case '/reset':
         // 交给上层处理（需要 API 访问权限）
         return { handled: false };
       default:
         return { handled: false };
+    }
+  }
+
+  /** voice-proxy.json 的绝对路径；源码与编译产物都能定位回仓库根目录。 */
+  private proxyConfigPath(): string {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repo = here.replace(/[\\/](dist|src)[\\/].*$/i, '');
+    return join(repo, 'config', 'voice-proxy.json');
+  }
+
+  /**
+   * 设置语音朗读语言。
+   *
+   * 只改 config/voice-proxy.json 的 translate 段；响度代理每 5 秒轮询该文件，
+   * 改完自动热加载，不需要重启任何进程。
+   */
+  private handleLang(ctx: CommandContext): string {
+    const file = this.proxyConfigPath();
+    type ProxyDoc = { translate?: { enabled?: boolean; target?: string } };
+    let doc: ProxyDoc;
+    try {
+      doc = JSON.parse(readFileSync(file, 'utf8')) as ProxyDoc;
+    } catch {
+      return `读不到语音代理配置：${file}`;
+    }
+    const t = doc.translate ?? (doc.translate = {});
+    const arg = ctx.arg.trim().toLowerCase();
+
+    if (!arg) {
+      const state = t.enabled ? `开（目标语言 ${t.target ?? 'ja'}）` : '关（用中文朗读）';
+      return [
+        `语音语言转换：${state}`,
+        '用法：',
+        '/lang ja — 日语朗读',
+        '/lang zh 或 /lang off — 中文朗读',
+        '/lang en — 英语朗读（也支持 ko 等两位语言码）',
+      ].join('\n');
+    }
+
+    const aliases: Record<string, string> = { jp: 'ja', 日语: 'ja', cn: 'zh', 中文: 'zh', 英语: 'en', 韩语: 'ko', off: 'zh' };
+    const supported = new Set(['zh', 'ja', 'en', 'ko', 'fr', 'de', 'es', 'ru', 'pt', 'it']);
+    const target = aliases[arg] ?? (supported.has(arg) ? arg : null);
+    if (!target) {
+      return `不支持的语言「${arg}」。可用：ja 日语 / zh 中文 / en 英语 / ko 韩语 / fr / de / es / ru / pt / it。`;
+    }
+
+    if (target === 'zh') {
+      t.enabled = false;
+    } else {
+      t.enabled = true;
+      t.target = target;
+    }
+
+    try {
+      writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    } catch (e) {
+      return `写入失败：${(e as Error).message}`;
+    }
+
+    return t.enabled
+      ? `好，语音改成用「${target}」朗读，约 5 秒后生效。`
+      : '好，语音改回中文朗读，约 5 秒后生效。';
+  }
+
+  /**
+   * 列出 / 切换语音音色。
+   *
+   * 音色列表来自本地语音服务（OpenAI 兼容）的 /health，写入走本机管理面板的
+   * speech.tts.voice，热生效。切换后由 speech-backend 调度器保留，不会被默认
+   * 音色覆盖回退。
+   */
+  private async handleVoice(ctx: CommandContext): Promise<string> {
+    const current = this.cfg.speech.tts.voice || '(未设置)';
+    let voices: Array<{ id: string; name: string }> = [];
+    for (const url of ['http://127.0.0.1:3910/health', 'http://127.0.0.1:3900/v1/audio/voices']) {
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) continue;
+        const doc = (await res.json()) as { voices?: Array<Record<string, unknown>> };
+        const list = (doc.voices ?? []).map((v) => ({
+          id: String(v['id'] ?? v['voice_id'] ?? ''),
+          name: String(v['name'] ?? ''),
+        }));
+        if (list.length > 0) { voices = list; break; }
+      } catch { /* 换下一个入口 */ }
+    }
+
+    const arg = ctx.arg.trim();
+    if (!arg) {
+      if (voices.length === 0) return `当前音色：${current}\n本地语音服务没有响应，暂时列不出音色。`;
+      const lines = voices.map((v, i) => `${i + 1}. ${v.name}${v.id === current ? '  ← 当前' : ''}`);
+      return [`当前音色：${current}`, '可用音色：', ...lines, '用法：/voice 名字 或 /voice 序号'].join('\n');
+    }
+    if (voices.length === 0) return '本地语音服务没有响应，暂时不能切换音色。';
+
+    const byIndex = /^\d+$/.test(arg) ? voices[Number(arg) - 1] : undefined;
+    const byName = voices.find((v) => v.name === arg) ?? voices.find((v) => v.id === arg);
+    const target = byIndex ?? byName;
+    if (!target) return `没找到音色「${arg}」。发 /voice 看列表。`;
+    if (target.id === current) return `已经是「${target.name}」了。`;
+
+    const port = this.cfg.server?.port ?? 3081;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ patch: { 'speech.tts.voice': target.id } }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const doc = (await res.json()) as { ok?: boolean; error?: string };
+      if (!doc.ok) return `切换失败：${doc.error ?? res.status}`;
+      return `音色已换成「${target.name}」，下一句起生效。`;
+    } catch (e) {
+      return `切换失败：${(e as Error).message}`;
     }
   }
 

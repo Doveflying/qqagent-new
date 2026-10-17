@@ -44,7 +44,7 @@ export const NapCatSchema = z.object({
     .prefault({}),
 });
 
-export const COMMAND_IDS = ['help', 'persona', 'personas', 'memory', 'forget', 'emotion', 'new', 'topics', 'stats', 'remind', 'reminders', 'cancelremind', 'daily'] as const;
+export const COMMAND_IDS = ['help', 'persona', 'personas', 'memory', 'forget', 'emotion', 'new', 'topics', 'stats', 'remind', 'reminders', 'cancelremind', 'daily', 'voice', 'lang'] as const;
 export type CommandId = typeof COMMAND_IDS[number];
 export const CommandPermissionSchema = z.enum(['admin', 'all', 'whitelist']);
 export type CommandPermission = z.infer<typeof CommandPermissionSchema>;
@@ -54,6 +54,8 @@ export const CommandPermissionsSchema = z.object({
   forget: CommandPermissionSchema.optional(), emotion: CommandPermissionSchema.optional(),
   new: CommandPermissionSchema.optional(), topics: CommandPermissionSchema.optional(), stats: CommandPermissionSchema.optional(),
   remind:CommandPermissionSchema.optional(),reminders:CommandPermissionSchema.optional(),cancelremind:CommandPermissionSchema.optional(),daily:CommandPermissionSchema.optional(),
+  voice:CommandPermissionSchema.optional(),
+  lang:CommandPermissionSchema.optional(),
 }).strict();
 
 export const TriggerSchema = z.object({

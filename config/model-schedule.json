@@ -1,0 +1,19 @@
+{
+  "agentUrl": "http://127.0.0.1:3081",
+  "default": {
+    "provider": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "rules": [
+    {
+      "name": "工作日高峰用免费模型",
+      "mode": "chat",
+      "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+      "from": "09:00",
+      "to": "18:00",
+      "provider": "zhipu",
+      "model": "glm-5.3-flash",
+      "note": "只切主对话；情绪/记忆/摘要仍用 deepseek-flash"
+    }
+  ]
+}

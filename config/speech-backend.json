@@ -1,0 +1,16 @@
+{
+  "agentUrl": "http://127.0.0.1:3081",
+  "probeUrl": "http://127.0.0.1:3910/health",
+  "local": {
+    "provider": "voicestudio",
+    "model": "omnivoice",
+    "voice": "d917c46b",
+    "note": "本地默认音色。d917c46b=宫城，398e3278=曼波，d7f14a67=凑企鹅；QQ 里发 /voice 可随时换"
+  },
+  "cloud": {
+    "provider": "siliconflow",
+    "model": "FunAudioLLM/CosyVoice2-0.5B",
+    "voice": "FunAudioLLM/CosyVoice2-0.5B:alex",
+    "note": "云端硬基流动，VoiceStudio 或响度代理不在线时用它"
+  }
+}

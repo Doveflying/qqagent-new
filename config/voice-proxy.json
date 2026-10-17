@@ -1,0 +1,25 @@
+{
+  "translate": {
+    "enabled": true,
+    "target": "ja",
+    "note": "把要朗读的中文回复翻成目标语言再合成；聊天文字仍保持中文。/lang 可随时切换"
+  },
+  "translator": {
+    "providerKey": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "local": {
+    "enabled": true,
+    "baseURL": "http://127.0.0.1:3900",
+    "language": "ja",
+    "note": "VoiceStudio 本地；language 会作为请求字段发给它"
+  },
+  "cloud": {
+    "enabled": true,
+    "providerKey": "siliconflow",
+    "baseURL": "https://api.siliconflow.cn/v1",
+    "model": "FunAudioLLM/CosyVoice2-0.5B",
+    "voice": "FunAudioLLM/CosyVoice2-0.5B:alex",
+    "note": "本地不可用时由代理内部回落到云端，仍保持日语"
+  }
+}
