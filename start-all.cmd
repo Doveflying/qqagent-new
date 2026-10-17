@@ -17,11 +17,16 @@ if not errorlevel 1 (
 
 REM NapCat must be logged in, otherwise the agent runs but nobody answers.
 REM The usual cause is an expired quick-login token: QQ neither logs in nor
-REM shows a QR code. repair-login.cmd forces a fresh scan.
+REM shows a QR code. Repair it automatically instead of only warning.
 netstat -ano | findstr ":3001 " | findstr "LISTENING" >nul
 if errorlevel 1 (
-  echo [!] NapCat is not listening on 3001 - the bot account looks logged out.
-  echo     If the bot stays silent, run repair-login.cmd to re-scan the QR code.
+  echo [!] NapCat is not logged in - the bot would start but answer nothing.
+  echo     Closing QQ and switching to QR login in 10 seconds. Press Ctrl+C to cancel.
+  echo.
+  timeout /t 10 /nobreak >nul
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts\repair-login.ps1" -KillQQ
+  echo.
+  echo Continuing startup. If the bot stays silent, run repair-login.cmd manually.
   echo.
 )
 

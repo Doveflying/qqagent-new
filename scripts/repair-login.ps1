@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     修复 NapCat 登录状态：在"快速登录令牌失效、又不弹二维码"时，强制重新扫码。
 
@@ -18,7 +18,9 @@ param(
     [int]$Port = 3001,
     [string]$NapCatDir = 'C:\napcat',
     [int]$QrTimeoutSec = 120,
-    [int]$LoginTimeoutSec = 180
+    [int]$LoginTimeoutSec = 180,
+    # 自动结束已存在的 QQ 进程再重启。启动器会传这个参数，单独运行默认不带，避免误杀。
+    [switch]$KillQQ
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,11 +55,26 @@ if (-not (Test-Path $launcher)) {
 # ---------- 2. 检查 QQ 是否还挂着旧会话 ----------
 $qq = Get-Process QQ -ErrorAction SilentlyContinue
 if ($qq) {
-    Write-Step "检测到 $($qq.Count) 个 QQ 进程仍在运行。"
-    Write-Step "旧的 QQ 会话必须先退出，否则新启动的实例会冲突。"
-    Write-Step ""
-    Write-Step "请先关闭 QQ（右下角托盘 → 退出），然后重新运行本脚本。"
-    exit 3
+    if ($KillQQ) {
+        Write-Step "检测到 $($qq.Count) 个 QQ 进程，正在结束旧会话…"
+        try {
+            Stop-Process -Name QQ -Force -ErrorAction Stop
+            Stop-Process -Name QQEX -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-Step "结束 QQ 失败：$($_.Exception.Message)"
+            Write-Step "请手动退出 QQ 后重新运行本脚本。"
+            exit 3
+        }
+        Start-Sleep -Seconds 4
+        Write-Step "旧会话已结束。"
+    } else {
+        Write-Step "检测到 $($qq.Count) 个 QQ 进程仍在运行。"
+        Write-Step "旧的 QQ 会话必须先退出，否则新启动的实例会冲突。"
+        Write-Step ""
+        Write-Step "请先关闭 QQ（右下角托盘 → 退出），然后重新运行本脚本。"
+        Write-Step "或者加 -KillQQ 参数让脚本自动结束它们。"
+        exit 3
+    }
 }
 
 # ---------- 3. 临时移走快速登录令牌，强制走扫码 ----------
