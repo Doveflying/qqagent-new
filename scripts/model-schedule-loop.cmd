@@ -1,7 +1,7 @@
 @echo off
 REM Keep this file ASCII with CRLF.
 REM Every 10 minutes: model time table, speech backend, self post, watchdog.
-REM Started by start-all.cmd / start-silent.cmd; stop-all.cmd finds it by title.
+REM Started by start-all.cmd; stop-all.cmd finds it by title.
 setlocal
 
 REM Only one scheduler at a time. Each launcher starts one, so repeated starts
