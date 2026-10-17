@@ -1,7 +1,8 @@
 @echo off
 REM Keep this file ASCII with CRLF.
 REM Every 10 minutes: re-check the model time table and the speech backend.
-REM Started by start-all.cmd; closing its window stops the loop.
+REM Started by start-all.cmd; stop-all.cmd finds this window by its title.
+title QQAgent-Scheduler
 setlocal
 :loop
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0model-schedule.ps1" -Apply >> "%~dp0..\logs\model-schedule.log" 2>&1
