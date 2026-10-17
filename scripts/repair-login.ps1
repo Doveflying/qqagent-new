@@ -41,10 +41,30 @@ $quickBak = Join-Path $NapCatDir 'quick-login.txt.bak'
 $qrFile = Join-Path $NapCatDir 'cache\qrcode.png'
 $launcher = Join-Path $NapCatDir 'headless-napcat.bat'
 
-# ---------- 1. 已经登录就不动 ----------
+# ---------- 1. 真的在线就不动 ----------
+# 注意：不能只看端口。假在线时 3001 照样在监听，get_status.online 也仍是 true，
+# 但 bkn 为空、消息发不出去。所以真在线必须由看门狗用 bkn 判定。
+$reallyOnline = $false
 if (Test-Port $Port) {
-    Write-Step "OneBot 端口 $Port 已在监听：机器人已经登录，无需修复。"
+    try {
+        $wd = & node (Join-Path $PSScriptRoot 'watchdog.mjs') --verbose 2>&1
+        $line = ($wd | Where-Object { $_ -match 'ONLINE|OFFLINE|DOWN' } | Select-Object -Last 1)
+        if ($line -and ($line -match 'ONLINE')) { $reallyOnline = $true }
+    } catch {
+        # 看门狗跑不起来时保守处理：当作在线，避免误杀
+        $reallyOnline = $true
+    }
+}
+
+if ($reallyOnline -and -not $KillQQ) {
+    Write-Step "机器人确实在线（bkn 正常）：无需修复。"
     exit 0
+}
+
+if ($KillQQ) {
+    Write-Step "强制重登模式：忽略在线状态，直接重建会话。"
+} elseif (Test-Port $Port) {
+    Write-Step "端口 $Port 在监听，但会话是假在线（bkn 为空），将继续走重新登录。"
 }
 
 if (-not (Test-Path $launcher)) {
