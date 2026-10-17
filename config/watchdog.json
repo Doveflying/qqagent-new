@@ -1,0 +1,8 @@
+{
+  "onebotUrl": "ws://127.0.0.1:3001",
+  "agentUrl": "http://127.0.0.1:3081",
+  "offlineThreshold": 3,
+  "autoRestart": false,
+  "napcatLauncher": "C:\\napcat\\headless-napcat.bat",
+  "note": "NapCat 的 get_status.online=false 表示和腾讯服务器断开，但进程和端口都还正常——只看端口是发现不了的。连续 offlineThreshold 次判定断线；autoRestart=true 时自动重启 NapCat（会关闭当前 QQ 会话）。"
+}
