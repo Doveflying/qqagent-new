@@ -101,6 +101,7 @@ namespace QQAgent
                 try { Process.Start("explorer.exe", Path.Combine(_repo, "logs")); } catch { }
             }));
             ops.Controls.Add(MakeButton("刷新", 228, 60, delegate { UpdateStatus(); }));
+            ops.Controls.Add(MakeButton("发动态", 336, 60, delegate { RunNode("scripts\\self-post.mjs", "--force"); }));
 
             var footer = new Label
             {
@@ -153,6 +154,28 @@ namespace QQAgent
             try
             {
                 Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + full + "\" " + extraArgs)
+                {
+                    WorkingDirectory = _repo,
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "QQ Agent");
+            }
+        }
+
+        private void RunNode(string script, string extraArgs = "")
+        {
+            string full = Path.Combine(_repo, script);
+            if (!File.Exists(full))
+            {
+                MessageBox.Show(this, "找不到 " + full, "QQ Agent");
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo("cmd.exe", "/c node \"" + full + "\" " + extraArgs + " & echo. & pause")
                 {
                     WorkingDirectory = _repo,
                     UseShellExecute = true,
