@@ -1,0 +1,36 @@
+{
+  "enabled": true,
+  "persona": "shiori",
+  "napcat": {
+    "url": "ws://127.0.0.1:3001"
+  },
+  "target": {
+    "qzone": true,
+    "ugcRight": 1,
+    "groups": [],
+    "note": "groups 填群号数组后，会在发说说的同时往这些群发一条；留空只发 QQ 空间"
+  },
+  "limits": {
+    "perDay": 1,
+    "minGapHours": 18,
+    "activeFrom": "09:00",
+    "activeTo": "23:00",
+    "note": "每天最多 perDay 条；两次间隔至少 minGapHours 小时；只在 activeFrom-activeTo 内随机挑一个时间点"
+  },
+  "llm": {
+    "providerKey": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "style": {
+    "minChars": 25,
+    "maxChars": 90,
+    "topics": [
+      "今天的心情",
+      "刚想到的一件小事",
+      "对某句歌词或书里一句话的感觉",
+      "有点想吐槽的事",
+      "突然想起的一个人"
+    ],
+    "note": "topics 只是给她一个随机起点，不是必须写的内容"
+  }
+}
