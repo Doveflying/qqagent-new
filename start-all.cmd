@@ -48,7 +48,15 @@ start "" /min cmd /c "scripts\model-schedule-loop.cmd"
 start "" /min cmd /c "scripts\open-panel.cmd"
 
 REM Agent in the foreground; this window is the agent console.
-call "start.bat"
+REM Prefer the compiled output: it starts faster and does not depend on the
+REM esbuild service that tsx needs. Fall back to npm start (tsx) on a fresh
+REM clone where dist has not been built yet.
+if exist "dist\src\index.js" (
+  node "dist\src\index.js"
+) else (
+  echo [i] dist\src\index.js not found, falling back to npm start ...
+  call "start.bat"
+)
 
 set "EXITCODE=%ERRORLEVEL%"
 rmdir "%LOCK%" 2>nul
