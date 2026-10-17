@@ -101,7 +101,7 @@ namespace QQAgent
                 try { Process.Start("explorer.exe", Path.Combine(_repo, "logs")); } catch { }
             }));
             ops.Controls.Add(MakeButton("刷新", 228, 60, delegate { UpdateStatus(); }));
-            ops.Controls.Add(MakeButton("发动态", 336, 60, delegate { RunNode("scripts\\self-post.mjs", "--force"); }));
+            ops.Controls.Add(MakeButton("发动态", 336, 60, delegate { RunCmd("post-now.cmd"); }));
 
             var footer = new Label
             {
