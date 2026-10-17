@@ -53,6 +53,49 @@ async function main(): Promise<void> {
   }
   const { app, providers, personas, root } = loaded;
 
+  // ==================== 1.5 单实例锁 ====================
+  // 两个实例会同时连 OneBot、写同一个 brain.db，表现是"启动后静默消失"：
+  // 日志正常、没有报错、进程就没了。启动器层的锁挡不住所有入口
+  // （任务计划、手动 npm start、旧快捷方式），所以在进程层面再兜一层。
+  const runtimeDir = path.resolve(root, 'runtime');
+  const pidFile = path.join(runtimeDir, 'agent.pid');
+  try {
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    const rawPrev = fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8') : '';
+    const prev = Number(rawPrev.trim());
+    if (Number.isInteger(prev) && prev > 0 && prev !== process.pid) {
+      let alive = true;
+      try {
+        process.kill(prev, 0);
+      } catch (e) {
+        // EPERM 说明进程存在但无权限操作；只有 ESRCH 才代表已退出
+        alive = (e as NodeJS.ErrnoException).code === 'EPERM';
+      }
+      if (alive) {
+        console.error(
+          [
+            '',
+            `[X] 已有 QQ Agent 在运行（PID ${prev}）。`,
+            '    两个实例会争抢 OneBot 连接和数据库，导致双方静默退出。',
+            `    先结束 PID ${prev}（或双击「停止 QQ Agent」）再启动。`,
+            '',
+          ].join('\n'),
+        );
+        process.exit(1);
+      }
+    }
+    fs.writeFileSync(pidFile, String(process.pid), 'utf8');
+    process.on('exit', () => {
+      try {
+        if (fs.readFileSync(pidFile, 'utf8').trim() === String(process.pid)) fs.unlinkSync(pidFile);
+      } catch {
+        /* 退出阶段忽略清理失败 */
+      }
+    });
+  } catch (e) {
+    console.error(`[!] 单实例锁写入失败，继续启动：${(e as Error).message}`);
+  }
+
   // ==================== 2. 日志 ====================
   const log = initLogger({
     level: app.log.level,
