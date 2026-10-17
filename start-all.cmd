@@ -41,4 +41,14 @@ start "" /min cmd /c "scripts\open-panel.cmd"
 REM Agent in the foreground; this window is the agent console.
 call "start.bat"
 
+REM Keep the console open so an unexpected exit does not look like "nothing happened".
+set "EXITCODE=%ERRORLEVEL%"
+echo.
+echo ============================================================
+echo   Agent exited with code %EXITCODE%
+echo   Time: %DATE% %TIME%
+echo ============================================================
+>> "logs\start-all.log" echo [%DATE% %TIME%] agent exited with code %EXITCODE%
+if not defined QQ_AGENT_NO_PAUSE pause
+
 endlocal
