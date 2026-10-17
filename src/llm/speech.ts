@@ -266,7 +266,7 @@ export class SpeechService {
             this.log.info({
                 scope: msg.scope,
                 persona: persona.id,
-                voice: persona.voice.voice || 'default',
+                voice: persona.voice.voice || config.speech.tts.voice || 'default',
                 mode: config.speech.tts.mode,
                 format: config.speech.tts.format,
                 bytes: bytes.length,
