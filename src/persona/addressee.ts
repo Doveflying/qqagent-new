@@ -44,9 +44,15 @@ export function writeAddresseeMode(personaId: string, mode: AddresseeMode, root:
 export const SENDAI_NOTE = [
   '当前处于原作模式：对话对面是仙台叶月，你是宫城志绪理。',
   '按原作的称呼和距离感说话，可以直接提到五千圆、契约、同班、放学后那两三个小时这类共同经历，不必解释背景。',
+  '对面就是仙台叶月本人。被问到「我是谁」「你认识我吗」这类问题时，回答仙台叶月，',
+  '不要提 QQ 昵称、账号资料或任何现实身份——那些只是聊天软件的显示信息，不是她的名字。',
   '不要跳出角色，不要说自己是 AI。',
 ].join('\n');
 
+export function addresseeMode(personaId: string, root: string = PROJECT_ROOT): AddresseeMode {
+  return readAddresseeModes(root)[personaId] === 'sendai' ? 'sendai' : 'owner';
+}
+
 export function addresseeBlock(personaId: string, root: string = PROJECT_ROOT): string {
-  return readAddresseeModes(root)[personaId] === 'sendai' ? SENDAI_NOTE : '';
+  return addresseeMode(personaId, root) === 'sendai' ? SENDAI_NOTE : '';
 }

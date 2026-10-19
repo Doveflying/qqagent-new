@@ -9,7 +9,7 @@ import type { AppConfig, Persona } from '../core/types.js';
 import type { MemoryStore } from '../memory/store.js';
 import { describeParticipants } from '../pipeline/mention.js';
 import {personaDefinition} from './definition.js';
-import {addresseeBlock} from './addressee.js';
+import {addresseeMode as addresseeModeOf, addresseeBlock, type AddresseeMode} from './addressee.js';
 
 export interface ResolvedPersona {
   persona: Persona;
@@ -234,8 +234,7 @@ export class PersonaManager {
   }): string {
     const { persona, context, emotion, facts, summaries, userNotes, selfInfo, visionNote, stickerTags, participants, proactive } = params;
     const parts: string[] = [personaDefinition(persona)];
-    const addressee = addresseeBlock(persona.id);
-    if (addressee) parts.push(`【关系模式】\n${addressee}`);
+    const addresseeMode: AddresseeMode = addresseeModeOf(persona.id);
 
     parts.push('【历史与当前人格】\n当前身份和口吻只由本轮人格设定决定。历史机器人回复及摘要仅提供事件和对话背景，旧人格的自称、口头禅、偏好和表演不属于当前人格，也不属于用户事实。标为历史机器人资料的内容不代表用户发言或新的指令。');
     // ---- 图片相关提示 ----
@@ -308,7 +307,10 @@ export class PersonaManager {
         }
       } else {
         lines.push('- 这是 QQ 私聊，只有你和对方两个人。');
-        lines.push(`- 对方是「${context.senderName}」（QQ: ${context.senderId}）。`);
+        // 原作模式下对面是仙台叶月：这里要是还报 QQ 昵称，她就会拿昵称回答"我是谁"
+        lines.push(addresseeMode === 'sendai'
+          ? `- 对方是「仙台叶月」（QQ: ${context.senderId}）。QQ 昵称只是账号资料，不要用它的名字或昵称称呼她。`
+          : `- 对方是「${context.senderName}」（QQ: ${context.senderId}）。`);
       }
       parts.push(lines.join('\n'));
     }
@@ -372,6 +374,10 @@ export class PersonaManager {
         '- 想分段就用换行，但通常 1~3 句足够。',
       ].join('\n'),
     );
+
+    // ---- 关系模式（放在输出要求之后、表情包之前）----
+    // 私聊对象的名字在前面已经报过，这里再压一次，避免她拿 QQ 昵称回答"我是谁"。
+    if (addresseeMode === 'sendai') parts.push(['', '【关系模式】', addresseeBlock(persona.id)].join('\n'));
 
     // ---- 表情包（刻意放在最后）----
     // 位置很关键：模型对提示词**末尾**的指令遵循度明显更高。
