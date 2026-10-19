@@ -250,6 +250,18 @@ node scripts/obsidian-sync.mjs --export   # 长期事实 -> 记忆/事实-YYYY-M
 node scripts/obsidian-sync.mjs --dry      # 只看会改什么
 ```
 
+`import` 支持三种来源：整篇笔记（`identity` / `speakingStyle` / `interactionStyle` / `examples`）、额外整篇笔记（`extra`）、以及**按小节导入**（`sections`）。角色圣经动辄几千字，全塞进提示词只会稀释人格，所以只挑行为相关的几节：
+
+```json
+"sections": [
+  { "note": "宫城志绪理.md", "section": "四、性格", "into": "identity" },
+  { "note": "宫城志绪理.md", "section": "八、说话方式", "into": "speakingStyle" },
+  { "note": "宫城志绪理.md", "section": "十、与你相处的节奏", "into": "interactionStyle" }
+]
+```
+
+`section` 按二级标题精确匹配（`## 四、性格`），取到下一个二级标题为止。外貌、家庭、五感记忆这类留在笔记里，需要时再加一行就行——每加一节，每轮对话的输入 token 都会跟着涨。
+
 启动器把它挂在调度循环里，每 10 分钟跑一次，所以改完笔记不用手动操作，也不必重启 Agent。人格 YAML 是产物，直接改会在下一轮被笔记覆盖。
 
 ### 主动私聊

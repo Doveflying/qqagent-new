@@ -1,26 +1,49 @@
 {
-    "vault":  "C:\\Users\\韩凌云\\Desktop\\work\\QQAgent-Char",
+    "vault":  "C:\\桌面图标\\qwe\\vault-seed",
     "cli":  "C:\\Users\\韩凌云\\Desktop\\work\\obsidian-bridge\\obsidian.mjs",
     "persona":  "shiori",
     "import":  {
-                   "identity":  "角色/宫城志绪理/设定.md",
-                   "speakingStyle":  "角色/宫城志绪理/口癖.md",
-                   "interactionStyle":  "角色/宫城志绪理/关系.md",
+                   "identity":  "设定.md",
+                   "speakingStyle":  "口癖.md",
+                   "interactionStyle":  "关系.md",
                    "note":  "这三篇由人维护，agent 只读；同步后写进人格的结构化字段",
-                   "examples":  "角色/宫城志绪理/示例对话.md",
+                   "examples":  "示例对话.md",
+                   "note2":  "角色圣经按小节挑：只进行为相关的几节，外貌/家庭/日常留在笔记里",
+                   "sections":  [
+                                    {
+                                        "note":  "宫城志绪理.md",
+                                        "section":  "四、性格",
+                                        "into":  "identity"
+                                    },
+                                    {
+                                        "note":  "宫城志绪理.md",
+                                        "section":  "八、说话方式",
+                                        "into":  "speakingStyle"
+                                    },
+                                    {
+                                        "note":  "宫城志绪理.md",
+                                        "section":  "十、与\"你\"的相处节奏",
+                                        "into":  "interactionStyle"
+                                    },
+                                    {
+                                        "note":  "宫城志绪理.md",
+                                        "section":  "十四、边界与红线",
+                                        "into":  "interactionStyle"
+                                    }
+                                ],
                    "extra":  [
                                  {
                                      "into":  "identity",
-                                     "note":  "角色/宫城志绪理/日常.md"
+                                     "note":  "日常.md"
                                  },
                                  {
                                      "into":  "interactionStyle",
-                                     "note":  "角色/宫城志绪理/雷点.md"
+                                     "note":  "雷点.md"
                                  }
                              ]
                },
     "export":  {
-                   "dir":  "角色/宫城志绪理/记忆",
+                   "dir":  "记忆",
                    "index":  "记忆索引",
                    "db":  "data/brain.db",
                    "note":  "从 brain.db 导出长期事实；手动改这些文件会被下次导出覆盖"

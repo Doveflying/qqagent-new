@@ -30,14 +30,9 @@ function readJson(file, fallback = null) {
 function log(msg) { console.log(`[obsidian] ${msg}`); }
 function fail(msg) { console.error(`[obsidian] ${msg}`); process.exit(1); }
 
-/** 去掉 frontmatter 与 agent 署名行，得到正文。 */
-function stripFrontmatter(text) {
-  let t = text.replace(/^\uFEFF/, '');
-  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(t);
-  if (m) t = t.slice(m[0].length);
-  // 去掉「## 相关」之后的双链区，那是给人看的导航，不该进提示词
-  t = t.split(/\r?\n##\s*相关/)[0];
-  const lines = t.split(/\r?\n/)
+/** 把一段正文压成提示词形态：去列表符号、标题转「标签：」、丢导航双链。 */
+function cleanBody(text) {
+  const lines = text.split(/\r?\n/)
     .filter((line) => !/^>\s*由 agent 更新于/.test(line.trim()))
     .map((line) => line.trim())
     // 标题行去掉：列表符号和 # 会诱导模型输出"列点式"回答
@@ -49,6 +44,41 @@ function stripFrontmatter(text) {
     .map((line) => line.replace(/^[-*]\s+/, ''))
     .filter((line) => !/^\[\[.*\]\]$/.test(line));
   return lines.join('\n').trim();
+}
+
+/** 去掉 frontmatter 与 agent 署名行，得到正文。 */
+function stripFrontmatter(text) {
+  let t = text.replace(/^\uFEFF/, '');
+  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(t);
+  if (m) t = t.slice(m[0].length);
+  // 去掉「## 相关」之后的双链区，那是给人看的导航，不该进提示词
+  t = t.split(/\r?\n##\s*相关/)[0];
+  return cleanBody(t);
+}
+
+/**
+ * 取一篇笔记里某个二级标题下的正文，到下一个二级标题为止。
+ * 角色圣经动辄六千字，全塞进提示词只会稀释人格，按小节挑才是对的。
+ */
+function readSection(cfg, relPath, heading) {
+  const full = path.join(cfg.vault, relPath.replace(/\//g, path.sep));
+  if (!fs.existsSync(full)) throw new Error(`笔记不存在：${full}`);
+  const lines = fs.readFileSync(full, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/);
+  const want = String(heading).replace(/\s+/g, '');
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^##\s+(.+)$/.exec(lines[i]);
+    if (!m) continue;
+    if (start === -1) {
+      if (m[1].replace(/\s+/g, '') === want) start = i + 1;
+    } else {
+      end = i;
+      break;
+    }
+  }
+  if (start === -1) return '';
+  return cleanBody(lines.slice(start, end).join('\n'));
 }
 
 function readNote(cfg, relPath) {
@@ -141,6 +171,18 @@ async function doImport(cfg) {
     if (base.includes(body.slice(0, 40))) { log(`${extra.into} 已包含 ${extra.note}，跳过`); continue; }
     persona.structured[extra.into] = `${base}\n\n${body}\n`;
     changes.push({ field: `${extra.into}+=${extra.note}`, rel: extra.note, chars: body.length });
+  }
+
+  // 按小节导入：角色圣经很大，只挑行为相关的几节进提示词
+  for (const sec of cfg.import?.sections ?? []) {
+    if (!sec?.into || !sec?.note || !sec?.section) continue;
+    let body = '';
+    try { body = readSection(cfg, sec.note, sec.section); } catch (e) { log(`跳过 ${sec.note}：${e.message}`); continue; }
+    if (!body) { log(`跳过 ${sec.note} # ${sec.section}：没有这一节或内容为空`); continue; }
+    const base = String(persona.structured[sec.into] || '').trimEnd();
+    if (base.includes(body.slice(0, 40))) { log(`${sec.into} 已包含 ${sec.note} # ${sec.section}，跳过`); continue; }
+    persona.structured[sec.into] = `${base}\n\n${body}\n`;
+    changes.push({ field: `${sec.into}+=${sec.note}#${sec.section}`, rel: `${sec.note}#${sec.section}`, chars: body.length });
   }
 
   // 示例对话 → persona.examples（比规则更能稳定语气）
