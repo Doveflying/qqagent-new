@@ -6,39 +6,45 @@
 <title>QQ Agent 管理面板</title>
 <style>
   :root {
-    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --border:#2a2f3a;
-    --text:#e4e7ec; --dim:#8b93a1; --accent:#6b8afd; --accent2:#4a6cf7;
-    --ok:#3ecf8e; --warn:#f0b429; --err:#f45b69; --pink:#ff7ab6;
+    --bg:#0d1018; --panel:#151a25; --panel2:#1b2230; --panel3:#222b3c; --border:#2b3548;
+    --text:#eef2fa; --dim:#9aa7ba; --accent:#8aa4ff; --accent2:#647ff1;
+    --ok:#50d49b; --warn:#f7bd4a; --err:#fa7182; --pink:#f58ac1; --shadow:0 18px 48px rgba(0,0,0,.22);
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6}
+  html{background:var(--bg)}
+  body{min-width:320px;background:var(--bg);-webkit-font-smoothing:antialiased;color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.6}
+  button,input,select,textarea{font:inherit}
+  button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,nav button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .layout{display:flex;min-height:100vh}
-  nav{width:200px;background:var(--panel);border-right:1px solid var(--border);padding:20px 0;position:sticky;top:0;height:100vh;flex-shrink:0}
-  nav h1{font-size:15px;padding:0 20px 16px;font-weight:600}
+  nav{width:224px;background:rgba(21,26,37,.92);backdrop-filter:blur(18px);border-right:1px solid var(--border);padding:22px 12px;position:sticky;top:0;height:100vh;flex-shrink:0}
+  nav h1{font-size:16px;padding:0 10px 18px;font-weight:700;letter-spacing:.1px}
   nav h1 small{display:block;font-size:11px;color:var(--dim);font-weight:400;margin-top:2px}
-  nav a{display:block;padding:9px 20px;color:var(--dim);text-decoration:none;border-left:2px solid transparent;cursor:pointer;font-size:13px}
-  nav a:hover{color:var(--text);background:var(--panel2)}
-  nav a.active{color:var(--accent);border-left-color:var(--accent);background:var(--panel2)}
-  main{flex:1;min-width:0;padding:24px 28px;max-width:1200px;overflow-x:hidden}
+  nav button{display:block;width:100%;text-align:left;padding:9px 12px;margin:2px 0;color:var(--dim);background:transparent;border:1px solid transparent;border-radius:8px;cursor:pointer;font-size:13px;transition:background .15s,color .15s,transform .15s}
+  nav button:hover{color:var(--text);background:var(--panel2);transform:translateX(2px);filter:none;box-shadow:none}
+  nav button.active{color:var(--text);border-color:var(--border);background:var(--panel2)}
+  main{flex:1;min-width:0;padding:28px clamp(18px,3vw,38px) 40px;max-width:1280px;overflow-x:hidden}
   .page{display:none}
   .page.active{display:block}
-  h2{font-size:19px;margin-bottom:4px}
-  .sub{color:var(--dim);font-size:13px;margin-bottom:20px}
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:16px}
+  .page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:24px}
+  h2{font-size:23px;letter-spacing:-.35px;margin-bottom:3px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:0;max-width:760px}
+  .page-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .refresh-note{font-size:11px;color:var(--dim);white-space:nowrap}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:16px;box-shadow:0 7px 22px rgba(0,0,0,.09)}
   .card h3{font-size:14px;margin-bottom:12px}
   .grid{display:grid;gap:12px}
   .grid.c2{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
   .grid.c3{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
   .grid.c4{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
-  .stat{background:var(--panel2);border-radius:8px;padding:14px}
-  .stat .v{font-size:22px;font-weight:600}
-  .stat .k{font-size:12px;color:var(--dim)}
+  .stat{background:var(--panel2);border:1px solid rgba(154,167,186,.10);border-radius:8px;padding:12px 14px;min-height:64px;display:flex;flex-direction:column;justify-content:center}
+  .stat .v{font-size:19px;font-weight:600;letter-spacing:-.2px;font-variant-numeric:tabular-nums}
+  .stat .k{font-size:11.5px;color:var(--dim);margin-top:3px;letter-spacing:.2px}
   label{display:block;font-size:12px;color:var(--dim);margin-bottom:5px}
-  input,select,textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:7px;font-family:inherit;font-size:13px;outline:none}
-  input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+  input,select,textarea{width:100%;background:rgba(10,13,20,.72);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:13px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(138,164,255,.13)}
   textarea{resize:vertical;min-height:80px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
-  button{background:var(--accent2);color:#fff;border:none;padding:8px 16px;border-radius:7px;cursor:pointer;font-size:13px;font-family:inherit;transition:background .15s}
-  button:hover{background:var(--accent)}
+  button{background:var(--accent2);color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;transition:background .15s,border-color .15s}
+  button:hover{background:#7189f5}
   button:disabled{opacity:.5;cursor:not-allowed}
   button.ghost{background:transparent;border:1px solid var(--border);color:var(--dim)}
   button.ghost:hover{background:var(--panel2);color:var(--text)}
@@ -56,11 +62,11 @@
   th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
   th{color:var(--dim);font-weight:500;font-size:12px}
   tr:hover td{background:var(--panel2)}
-  .msg{padding:8px 12px;border-radius:7px;margin-bottom:8px;font-size:13px}
+  .msg{padding:9px 12px;border-radius:8px;margin-bottom:8px;font-size:13px}
   .msg.ok{background:rgba(62,207,142,.12);color:var(--ok)}
   .msg.err{background:rgba(244,91,105,.12);color:var(--err)}
   .msg.info{background:rgba(107,138,253,.12);color:var(--accent)}
-  .log{background:#0a0c10;border-radius:8px;padding:12px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;max-height:500px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#b8c0cc}
+  .log{background:#0a0d14;border:1px solid var(--border);border-radius:8px;padding:12px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;max-height:500px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#c1c9d6}
   .bar{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden}
   .bar>i{display:block;height:100%;background:var(--accent)}
   .persona-card{display:flex;gap:12px;align-items:flex-start}
@@ -112,36 +118,50 @@
   .role-row select{flex:1 1 150px;min-width:130px;font-size:12px;padding:6px 8px}
   .pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;background:rgba(107,138,253,.15);color:var(--accent)}
   .pill.grey{background:var(--panel);color:var(--dim)}
-  @media(max-width:640px){
+  @media(max-width:760px){
     .layout{flex-direction:column}
-    nav{width:100%;height:auto;position:static;display:flex;flex-wrap:wrap;padding:10px;border-right:0;border-bottom:1px solid var(--border)}
+    nav{width:100%;height:auto;position:sticky;z-index:20;display:flex;flex-wrap:wrap;padding:10px;border-right:0;border-bottom:1px solid var(--border)}
     nav h1{width:100%;padding:0 10px 8px}
-    nav a{padding:6px 10px;border-left:0;border-radius:6px}
+    nav button{width:auto;padding:6px 9px;margin:1px;font-size:12px}
+    nav button:hover{transform:none}
     main{width:100%;padding:16px}
     .grid2{grid-template-columns:minmax(0,1fr)}
+    .page-head{margin-bottom:18px}.page-actions{align-self:center}.refresh-note{display:none}
+    .card{padding:14px;border-radius:10px;overflow-x:auto}
+    table{min-width:560px}.row>*{min-width:100%}.row>button{flex:1 1 100%}
   }
+  /* ---- 细节层：浏览器表面 + 数据排版 ---- */
+  ::selection{background:rgba(138,164,255,.30);color:#fff}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--panel3);border-radius:6px;border:2px solid var(--bg)}
+  ::-webkit-scrollbar-thumb:hover{background:#33405a}
+  .mono,td,th{font-variant-numeric:tabular-nums}
+  a{text-underline-offset:2px}
+  nav button svg.ico{width:15px;height:15px;margin-right:9px;vertical-align:-2px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
+  nav button.active svg.ico{opacity:1}
+  .card h3{letter-spacing:.1px}
 </style>
 </head>
 <body>
 <div class="layout">
   <nav>
     <h1>🐱 QQ Agent<small id="appVersion">管理面板</small></h1>
-    <a data-page="overview" class="active">📊 概览</a>
-    <a data-page="providers">🔌 模型接入</a>
-    <a data-page="personas">🎭 人格</a>
-    <a data-page="stickers">🖼 表情包</a>
-    <a data-page="access">🔐 权限</a>
-    <a data-page="memory">🧠 记忆</a>
-    <a data-page="emotion">📈 情绪</a>
-    <a data-page="logs">📜 日志</a>
-    <a data-page="tasks">⏰ 提醒与日报</a>
+    <button type="button" data-page="overview" class="active"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"/></svg>概览</button>
+    <button type="button" data-page="providers"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3v5M10 3v5M4 8h8v2a4 4 0 0 1-4 4 4 4 0 0 1-4-4zM8 14v3"/></svg>模型接入</button>
+    <button type="button" data-page="personas"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="6" r="3"/><path d="M2.5 14c.6-2.9 2.9-4.5 5.5-4.5s4.9 1.6 5.5 4.5"/></svg>人格</button>
+    <button type="button" data-page="stickers"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><path d="M5 10l2.5-3 2 2.2L11 8l2 2"/><circle cx="5.8" cy="6.3" r=".9"/></svg>表情包</button>
+    <button type="button" data-page="access"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.8 7V5.4a2.2 2.2 0 0 1 4.4 0V7"/></svg>权限</button>
+    <button type="button" data-page="memory"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="4.5" rx="5" ry="2"/><path d="M3 4.5v7c0 1.1 2.2 2 5 2s5-.9 5-2v-7M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/></svg>记忆</button>
+    <button type="button" data-page="emotion"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 11l3.2-3.6 2.4 2.2L11 5.5l3 3"/><path d="M2 14h12"/></svg>情绪</button>
+    <button type="button" data-page="logs"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3.5h8M4 7h8M4 10.5h5.5"/></svg>日志</button>
+    <button type="button" data-page="tasks"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/></svg>提醒与日报</button>
   </nav>
   <main>
     <div id="toast"></div>
 
     <div class="page active" id="page-overview">
-      <h2>运行概览</h2>
-      <div class="sub">Agent 实时状态与数据统计</div>
+      <div class="page-head"><div><h2>运行概览</h2><div class="sub">Agent 实时状态、数据统计与常用开关</div></div><div class="page-actions"><span class="refresh-note" id="refreshNote">正在加载…</span><button type="button" class="ghost sm" id="refreshBtn">↻ 刷新</button></div></div>
       <div class="card"><h3>连接状态</h3><div class="grid c4" id="statusGrid"></div></div>
       <div class="card"><h3>数据统计</h3><div class="grid c4" id="statsGrid"></div></div>
       <div class="card">
@@ -455,7 +475,15 @@ const $ = (id) => document.getElementById(id);
 async function panelFetch(p, opt = {}, retry = true) {
   const headers=new Headers(opt.headers || {}); const token=sessionStorage.getItem('panelToken');
   if(token) headers.set('Authorization','Bearer '+token);
-  const response=await fetch(p,{...opt,headers});
+  const controller = opt.signal ? null : new AbortController();
+  const timeout = controller ? setTimeout(() => controller.abort(), 20000) : null;
+  let response;
+  try {
+    response=await fetch(p,{...opt,headers,signal:opt.signal || controller.signal});
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('请求超时，请检查服务是否正常运行');
+    throw e;
+  } finally { if (timeout) clearTimeout(timeout); }
   if(response.status===401 && retry) {
     const value=prompt('请输入管理面板 token（仅保存在本窗口会话）');
     if(value) {sessionStorage.setItem('panelToken',value);return panelFetch(p,opt,false);}
@@ -498,25 +526,63 @@ function fmtDuration(ms) {
   return Math.floor(s/3600) + ' 小时 ' + Math.floor((s%3600)/60) + ' 分';
 }
 
-document.querySelectorAll('nav a').forEach((a) => {
-  a.onclick = () => {
-    document.querySelectorAll('nav a').forEach((x) => x.classList.remove('active'));
-    document.querySelectorAll('.page').forEach((x) => x.classList.remove('active'));
-    a.classList.add('active');
-    $('page-' + a.dataset.page).classList.add('active');
-    if (a.dataset.page === 'providers') { loadProviders(); loadRoles(); }
-    if (a.dataset.page === 'personas') loadPersonas();
-    if (a.dataset.page === 'stickers') loadStickers();
-    if (a.dataset.page === 'access') loadAccess();
-    if (a.dataset.page === 'memory') { loadUsers(); loadConvScopes(); }
-    if (a.dataset.page === 'emotion') loadEmoUsers();
-    if (a.dataset.page === 'logs') loadLogs();
-    if (a.dataset.page === 'tasks') loadTasks();
-    if (a.dataset.page === 'overview') loadFeatures();
+const PAGE_TITLES = {overview:'运行概览',providers:'模型接入',personas:'人格系统',stickers:'表情包',access:'访问控制',memory:'记忆',emotion:'情绪',logs:'日志',tasks:'提醒与日报'};
+let activePage = 'overview';
+let refreshTimer = null;
+let overviewLoading = false;
+
+function setRefreshNote(message) {
+  const note = $('refreshNote');
+  if (note) note.textContent = message;
+}
+
+async function refreshActivePage() {
+  const actions = {
+    overview: () => loadOverview(),
+    providers: () => Promise.all([loadProviders(), loadRoles()]),
+    personas: () => loadPersonas(),
+    stickers: () => loadStickers(),
+    access: () => loadAccess(),
+    memory: () => Promise.all([loadUsers(), loadConvScopes()]),
+    emotion: () => loadEmoUsers(),
+    logs: () => loadLogs(),
+    tasks: () => loadTasks()
   };
+  const action = actions[activePage];
+  if (action) await action();
+}
+
+function scheduleRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  if (document.hidden) return;
+  const interval = activePage === 'overview' ? 15000 : (activePage === 'logs' ? 10000 : 30000);
+  refreshTimer = setTimeout(async () => {
+    await refreshActivePage();
+    scheduleRefresh();
+  }, interval);
+}
+
+function activatePage(page, updateHash = true) {
+  if (!PAGE_TITLES[page]) page = 'overview';
+  activePage = page;
+  document.querySelectorAll('nav [data-page]').forEach((x) => x.classList.toggle('active', x.dataset.page === page));
+  document.querySelectorAll('.page').forEach((x) => x.classList.toggle('active', x.id === 'page-' + page));
+  document.title = PAGE_TITLES[page] + ' · QQ Agent';
+  if (updateHash && location.hash !== '#' + page) history.replaceState(null, '', '#' + page);
+  setRefreshNote('正在刷新…');
+  refreshActivePage().finally(() => scheduleRefresh());
+}
+
+document.querySelectorAll('nav [data-page]').forEach((button) => {
+  button.onclick = () => activatePage(button.dataset.page || 'overview');
 });
+$('refreshBtn').onclick = () => { setRefreshNote('正在刷新…'); refreshActivePage(); };
+window.addEventListener('hashchange', () => activatePage(location.hash.slice(1), false));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { refreshActivePage(); scheduleRefresh(); } else if (refreshTimer) clearTimeout(refreshTimer); });
 
 async function loadOverview() {
+  if (overviewLoading) return;
+  overviewLoading = true;
   try {
     const d = await api('/api/overview');
     $('appVersion').textContent = '管理面板 · v' + d.app.version;
@@ -539,7 +605,7 @@ async function loadOverview() {
       '<div class="stat"><div class="v">' + (llm.providerCount || 0) + '</div><div class="k">供应商数</div></div>';
 
     // 功能开关（可交互，独立拉取）
-    loadFeatures();
+    void loadFeatures();
 
     const u = d.usage;
     $('usageGrid').innerHTML = [['输入 tokens',u.totalPrompt.toLocaleString()],['输出 tokens',u.totalCompletion.toLocaleString()],['调用次数',u.totalCalls]]
@@ -548,7 +614,9 @@ async function loadOverview() {
     $('usageTable').innerHTML = u.byModel.length === 0 ? '' :
       '<table><tr><th>Provider / 模型</th><th>调用</th><th>输入</th><th>输出</th></tr>' +
       u.byModel.map((m) => '<tr><td class="mono">' + esc(m.provider) + '/' + esc(m.model) + '</td><td>' + m.calls + '</td><td>' + m.promptTokens.toLocaleString() + '</td><td>' + m.completionTokens.toLocaleString() + '</td></tr>').join('') + '</table>';
-  } catch (e) { toast('加载概览失败: ' + e.message, 'err'); }
+    setRefreshNote('更新于 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false}));
+  } catch (e) { setRefreshNote('刷新失败'); toast('加载概览失败: ' + e.message, 'err'); }
+  finally { overviewLoading = false; }
 }
 
 function setDiscBusy(busy) {
@@ -1682,8 +1750,7 @@ $('logRefresh').onclick = loadLogs;
 $('personaModal').addEventListener('click', (e) => { if (e.target === $('personaModal')) closePersonaEditor(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePersonaEditor(); });
 
-loadOverview();
-setInterval(loadOverview, 10000);
+activatePage(location.hash.slice(1) || 'overview', false);
 </script>
 </body>
 </html>
