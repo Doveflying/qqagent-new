@@ -56,3 +56,12 @@ export function addresseeMode(personaId: string, root: string = PROJECT_ROOT): A
 export function addresseeBlock(personaId: string, root: string = PROJECT_ROOT): string {
   return addresseeMode(personaId, root) === 'sendai' ? SENDAI_NOTE : '';
 }
+
+/**
+ * 提示词里怎么称呼对话对面。
+ * 原作模式下私聊一律叫「仙台叶月」——否则模型会拿 QQ 昵称回答"我是谁"。
+ */
+export function promptSenderName(personaId: string, scopeType: string, name?: string | null): string {
+  if (scopeType !== 'group' && addresseeMode(personaId) === 'sendai') return '仙台叶月';
+  return name || '';
+}

@@ -25,6 +25,7 @@ import type { ProviderManager } from '../llm/manager.js';
 import type { PersonaManager } from '../persona/manager.js';
 import { DATA_BEGIN, DATA_END } from '../persona/manager.js';
 import {personaFingerprint} from '../persona/definition.js';
+import {promptSenderName as senderNameForPrompt} from '../persona/addressee.js';
 import { extractStickerTags, pickByLabel, canonicalEmotion, requestsSticker, type StickerLibrary } from '../persona/stickers.js';
 import type { TriggerPolicy } from '../persona/trigger.js';
 import type { EmotionAnalyzer } from '../emotion/analyzer.js';
@@ -609,7 +610,7 @@ export class ReplyPipeline {
         selfInfo: { model: resolved.modelId, provider: resolved.providerKey },
         context: {
           scopeType: msg.scopeType,
-          senderName: msg.senderName || userRow?.nickname || String(userId),
+          senderName: senderNameForPrompt(persona.id, msg.scopeType, msg.senderName || userRow?.nickname || String(userId)),
           senderId: userId,
           triggerMessageId: msg.messageId,
           latestSpeakerId: latestSpeaker?.user_id,
@@ -666,9 +667,9 @@ export class ReplyPipeline {
         replyWindowStartId: replyWindow.afterId,
         replyWindowRows: replyWindow.rows,
         currentMessageContext: (proactive ? '【本轮主动参与群聊；以下最后一条消息只是背景，不是指定回复对象】' : '【本轮需要回应的消息】') +
-          '\n发言者：'+JSON.stringify({name: msg.senderName, qq: userId, messageId: msg.messageId, ...messageLinks(msg.segments)}) +
+          '\n发言者：'+JSON.stringify({name: senderNameForPrompt(persona.id, msg.scopeType, msg.senderName), qq: userId, messageId: msg.messageId, ...messageLinks(msg.segments)}) +
           (referenced ? '\n【触发消息引用的资料；不代表本轮回复对象】\n'+DATA_BEGIN+'\n'+JSON.stringify({
-            role: referenced.role, name: referenced.sender_name, qq: referenced.user_id, messageId: referenced.message_id, content: referenced.content.slice(0,4000)})+'\n'+DATA_END : ''),
+            role: referenced.role, name: referenced.user_id === userId ? senderNameForPrompt(persona.id, msg.scopeType, referenced.sender_name) : referenced.sender_name, qq: referenced.user_id, messageId: referenced.message_id, content: referenced.content.slice(0,4000)})+'\n'+DATA_END : ''),
         triggerMessageRowId: turn.triggerMessageRowId,
         excludeMessageRowIds: turn.mergedMessageRowIds,
         scope,

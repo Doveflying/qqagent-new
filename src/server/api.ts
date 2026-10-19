@@ -22,7 +22,7 @@ import {memoryTerms} from '../memory/store.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { ProviderManager } from '../llm/manager.js';
 import type { PersonaManager } from '../persona/manager.js';
-import { readAddresseeModes, writeAddresseeMode } from '../persona/addressee.js';
+import { readAddresseeModes, writeAddresseeMode, addresseeMode as addresseeModeOf, promptSenderName } from '../persona/addressee.js';
 import { discoverModels } from '../llm/discover.js';
 import { resolveApiKey, PROJECT_ROOT } from '../config/loader.js';
 import {
@@ -690,6 +690,35 @@ export function createServer(deps: ServerDeps): { app: Hono; start: () => void; 
       return c.json({ ok: true, message: `人格 ${id} 已删除` });
     } catch (e) { log.warn({method:c.req.method,route:c.req.path,...errorDetails(e)}, '管理接口处理失败');
       return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  /**
+   * 预览某会话本轮会用到的系统提示词。
+   * 排查「她为什么这样回答」时看这个，比翻日志猜快得多。
+   */
+  app.get('/api/prompt/preview', (c) => {
+    try {
+      const scope = c.req.query('scope') || 'private:2731758714';
+      const scopeType = scope.startsWith('group:') ? 'group' : 'private';
+      const userId = Number(c.req.query('userId') || scope.split(':')[1] || 0) || 0;
+      const rawName = c.req.query('name') || String(userId);
+      const resolved = deps.personas.resolve(scope, userId);
+      const persona = resolved.persona;
+      const prompt = deps.personas.buildSystemPrompt({
+        persona,
+        context: {
+          scopeType,
+          senderName: promptSenderName(persona.id, scopeType, rawName),
+          senderId: userId,
+        },
+        emotion: null,
+      });
+      return c.json({ ok: true, personaId: persona.id, mode: addresseeModeOf(persona.id),
+        senderName: rawName, senderNameInPrompt: promptSenderName(persona.id, scopeType, rawName),
+        chars: prompt.length, prompt });
+    } catch (e) { log.warn({method:c.req.method,route:c.req.path,...errorDetails(e)}, '提示词预览失败');
+      return c.json({ ok: false, error: (e as Error).message }, 500);
     }
   });
 
