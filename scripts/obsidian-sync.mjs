@@ -35,11 +35,20 @@ function stripFrontmatter(text) {
   let t = text.replace(/^\uFEFF/, '');
   const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(t);
   if (m) t = t.slice(m[0].length);
-  return t
-    .split(/\r?\n/)
+  // 去掉「## 相关」之后的双链区，那是给人看的导航，不该进提示词
+  t = t.split(/\r?\n##\s*相关/)[0];
+  const lines = t.split(/\r?\n/)
     .filter((line) => !/^>\s*由 agent 更新于/.test(line.trim()))
-    .join('\n')
-    .trim();
+    .map((line) => line.trim())
+    // 标题行去掉：列表符号和 # 会诱导模型输出"列点式"回答
+    .filter(Boolean)
+    // 一级标题是笔记名，不进提示词
+    .filter((line) => !/^#\s+/.test(line))
+    // 其余标题转成「标签：」保留分类语义，但不带 Markdown 语法
+    .map((line) => line.replace(/^#{2,6}\s+(.+)$/, (_, h) => h + '：'))
+    .map((line) => line.replace(/^[-*]\s+/, ''))
+    .filter((line) => !/^\[\[.*\]\]$/.test(line));
+  return lines.join('\n').trim();
 }
 
 function readNote(cfg, relPath) {
@@ -59,6 +68,26 @@ function runCli(cfg, cliArgs) {
   return (r.stdout || '').trim();
 }
 
+/** 解析「Q: / A:」格式的示例对话。 */
+function parseExamples(md) {
+  const out = [];
+  let cur = null;
+  for (const raw of md.split(/\r?\n/)) {
+    const line = raw.trim();
+    const q = /^Q[:：]\s*(.+)$/.exec(line);
+    const a = /^A[:：]\s*(.+)$/.exec(line);
+    if (q) {
+      if (cur && cur.assistant) out.push(cur);
+      cur = { user: q[1].trim(), assistant: '' };
+    } else if (a) {
+      if (cur) cur.assistant = a[1].trim();
+    } else if (line && cur && cur.assistant) {
+      cur.assistant += `\n${line}`;
+    }
+  }
+  if (cur && cur.assistant) out.push(cur);
+  return out.slice(0, 24);
+}
 // ---------------- import：笔记 -> 人格 ----------------
 function doImport(cfg) {
   const personaPath = path.join(REPO, 'config', 'personas', `${cfg.persona}.yaml`);
@@ -81,6 +110,32 @@ function doImport(cfg) {
     if (before === body) { log(`${field}：无变化`); continue; }
     changes.push({ field, rel, chars: body.length });
     persona.structured[field] = `${body}\n`;
+  }
+
+  // 附加段落：日常 → identity，雷点 → interactionStyle
+  for (const extra of cfg.import?.extra ?? []) {
+    if (!extra?.into || !extra?.note) continue;
+    const body = readNote(cfg, extra.note);
+    if (!body) continue;
+    const base = String(persona.structured[extra.into] || '').trimEnd();
+    if (base.includes(body.slice(0, 40))) { log(`${extra.into} 已包含 ${extra.note}，跳过`); continue; }
+    persona.structured[extra.into] = `${base}\n\n${body}\n`;
+    changes.push({ field: `${extra.into}+=${extra.note}`, rel: extra.note, chars: body.length });
+  }
+
+  // 示例对话 → persona.examples（比规则更能稳定语气）
+  if (cfg.import?.examples) {
+    const body = readNote(cfg, cfg.import.examples);
+    const pairs = parseExamples(body);
+    if (pairs.length > 0) {
+      const before = JSON.stringify(persona.examples ?? []);
+      if (before !== JSON.stringify(pairs)) {
+        persona.examples = pairs;
+        changes.push({ field: `examples(${pairs.length})`, rel: cfg.import.examples, chars: pairs.length });
+      } else {
+        log('examples：无变化');
+      }
+    }
   }
 
   if (changes.length === 0) { log('人格已与笔记一致，无需写入'); return; }

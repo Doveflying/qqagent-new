@@ -1,17 +1,28 @@
 {
-  "vault": "C:\\Users\\韩凌云\\Desktop\\work\\QQAgent-Char",
-  "cli": "C:\\Users\\韩凌云\\Desktop\\work\\obsidian-bridge\\obsidian.mjs",
-  "persona": "shiori",
-  "import": {
-    "identity": "角色/宫城志绪理/设定.md",
-    "speakingStyle": "角色/宫城志绪理/口癖.md",
-    "interactionStyle": "角色/宫城志绪理/关系.md",
-    "note": "这三篇由人维护，agent 只读；同步后写进人格的结构化字段"
-  },
-  "export": {
-    "dir": "角色/宫城志绪理/记忆",
-    "index": "记忆索引",
-    "db": "data/brain.db",
-    "note": "从 brain.db 导出长期事实；手动改这些文件会被下次导出覆盖"
-  }
+    "vault":  "C:\\Users\\韩凌云\\Desktop\\work\\QQAgent-Char",
+    "cli":  "C:\\Users\\韩凌云\\Desktop\\work\\obsidian-bridge\\obsidian.mjs",
+    "persona":  "shiori",
+    "import":  {
+                   "identity":  "角色/宫城志绪理/设定.md",
+                   "speakingStyle":  "角色/宫城志绪理/口癖.md",
+                   "interactionStyle":  "角色/宫城志绪理/关系.md",
+                   "note":  "这三篇由人维护，agent 只读；同步后写进人格的结构化字段",
+                   "examples":  "角色/宫城志绪理/示例对话.md",
+                   "extra":  [
+                                 {
+                                     "into":  "identity",
+                                     "note":  "角色/宫城志绪理/日常.md"
+                                 },
+                                 {
+                                     "into":  "interactionStyle",
+                                     "note":  "角色/宫城志绪理/雷点.md"
+                                 }
+                             ]
+               },
+    "export":  {
+                   "dir":  "角色/宫城志绪理/记忆",
+                   "index":  "记忆索引",
+                   "db":  "data/brain.db",
+                   "note":  "从 brain.db 导出长期事实；手动改这些文件会被下次导出覆盖"
+               }
 }
