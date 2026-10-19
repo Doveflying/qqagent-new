@@ -22,6 +22,7 @@ import {memoryTerms} from '../memory/store.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { ProviderManager } from '../llm/manager.js';
 import type { PersonaManager } from '../persona/manager.js';
+import { readAddresseeModes, writeAddresseeMode } from '../persona/addressee.js';
 import { discoverModels } from '../llm/discover.js';
 import { resolveApiKey, PROJECT_ROOT } from '../config/loader.js';
 import {
@@ -689,6 +690,33 @@ export function createServer(deps: ServerDeps): { app: Hono; start: () => void; 
       return c.json({ ok: true, message: `人格 ${id} 已删除` });
     } catch (e) { log.warn({method:c.req.method,route:c.req.path,...errorDetails(e)}, '管理接口处理失败');
       return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  /** 关系模式：对面是用户本人，还是原作里的仙台叶月 */
+  app.get('/api/roleplay', (c) => {
+    try {
+      return c.json({ ok: true, modes: readAddresseeModes(), choices: [
+        { value: 'owner', label: '本人（默认）' },
+        { value: 'sendai', label: '仙台叶月（原作模式）' },
+      ] });
+    } catch (e) { log.warn({method:c.req.method,route:c.req.path,...errorDetails(e)}, '管理接口处理失败');
+      return c.json({ ok: false, error: (e as Error).message }, 500);
+    }
+  });
+
+  /** 切换关系模式，顺手重载人格让改动立刻生效 */
+  app.post('/api/roleplay', async (c) => {
+    try {
+      const body = await c.req.json<{ personaId?: string; mode?: 'owner' | 'sendai' }>();
+      if (!body?.personaId) return c.json({ ok: false, error: '缺少 personaId' }, 400);
+      if (body.mode !== 'owner' && body.mode !== 'sendai') return c.json({ ok: false, error: 'mode 只能是 owner 或 sendai' }, 400);
+      writeAddresseeMode(body.personaId, body.mode);
+      const count = deps.reloadPersonas();
+      return c.json({ ok: true, count, mode: body.mode,
+        message: body.mode === 'sendai' ? `已切到原作模式，对面按仙台叶月对待（重载 ${count} 个人格）` : `已切回：对面是用户本人（重载 ${count} 个人格）` });
+    } catch (e) { log.warn({method:c.req.method,route:c.req.path,...errorDetails(e)}, '管理接口处理失败');
+      return c.json({ ok: false, error: (e as Error).message }, 500);
     }
   });
 

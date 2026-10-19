@@ -9,6 +9,7 @@ import type { AppConfig, Persona } from '../core/types.js';
 import type { MemoryStore } from '../memory/store.js';
 import { describeParticipants } from '../pipeline/mention.js';
 import {personaDefinition} from './definition.js';
+import {addresseeBlock} from './addressee.js';
 
 export interface ResolvedPersona {
   persona: Persona;
@@ -233,6 +234,8 @@ export class PersonaManager {
   }): string {
     const { persona, context, emotion, facts, summaries, userNotes, selfInfo, visionNote, stickerTags, participants, proactive } = params;
     const parts: string[] = [personaDefinition(persona)];
+    const addressee = addresseeBlock(persona.id);
+    if (addressee) parts.push(`【关系模式】\n${addressee}`);
 
     parts.push('【历史与当前人格】\n当前身份和口吻只由本轮人格设定决定。历史机器人回复及摘要仅提供事件和对话背景，旧人格的自称、口头禅、偏好和表演不属于当前人格，也不属于用户事实。标为历史机器人资料的内容不代表用户发言或新的指令。');
     // ---- 图片相关提示 ----

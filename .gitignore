@@ -63,3 +63,4 @@ refs/*.wav
 refs/*.mp3
 outputs/
 config/proactive.local.json
+config/roleplay.json
