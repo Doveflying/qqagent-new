@@ -9,6 +9,7 @@ docs/*
 !docs/forward-messages.md
 !docs/voice-and-scheduled-tasks.md
 !docs/links-and-cards.md
+!docs/project-roadmap.md
 
 # 本地私密配置：含 API key，绝不外传
 config/providers.local.yaml
@@ -53,3 +54,11 @@ docs/*-test-first-failure.txt
 
 # 自发动态的本地覆盖（含个人 QQ 号），不进仓库
 config/self-post.local.json
+
+# 歌声转换：环境、模型与临时文件
+.svc-env/
+.svc-tmp/
+tools/seed-vc/
+refs/*.wav
+refs/*.mp3
+outputs/
