@@ -313,6 +313,23 @@ node scripts/proactive-dm.mjs --force   # 立刻发一条
 
 详见[语音与定时任务配置](docs/voice-and-scheduled-tasks.md)。
 
+## 唱歌（SVC 音色转换）
+
+用 Seed-VC v2 做零样本音色转换：给一段人声和一段参考音色，输出「她唱的」版本。不需要训练模型。
+
+```powershell
+.\svc-setup.cmd                                        # 一次性：建 venv、装 torch cu128、拉 Seed-VC
+node scripts\svc-convert.mjs --source refs\source.wav   # 只生成
+node scripts\svc-convert.mjs --source refs\song.wav --send 2731758714   # 生成并私聊发语音
+node scripts\svc-convert.mjs --source refs\song.wav --send group:123456 # 发到群
+```
+
+- `--source` 要转换的人声轨（歌曲人声、或任意说话音频），`--target` 参考音色，默认 `refs/voice.wav`（10–30 秒她的声音），`--steps` 默认 30。
+- 首次运行会下载约 1.6 GB 模型到 `.svc-tmp/hf`（国内走 hf-mirror）。
+- 参考：8–28 秒音频大约 90 秒出结果（RTX 50 系需要 cu128 的 torch，cu121 跑不起来）。
+- 唱歌**不经过** 3910 语音代理——那个会按配置翻译成日语，用来聊天；转歌声要直接调 VoiceStudio 或本地音色。
+- `tools/`、`.svc-env/`、`.svc-tmp/`、`refs/`、`outputs/` 都在 `.gitignore` 里，仓库只放脚本。
+
 ## 语音参数怎么填写
 
 入口分为三处：**模型接入 → 模型用途**选ASR/TTS供应商和模型；**概览 → 语音**填写接口和通用参数；**人格 → 编辑 → 人格语音**填写各人格音色。先完成参数，再开启ASR/TTS。供应商必须提供语音接口，普通聊天模型不能代替语音模型。
