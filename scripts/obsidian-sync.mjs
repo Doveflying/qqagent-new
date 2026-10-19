@@ -88,8 +88,27 @@ function parseExamples(md) {
   if (cur && cur.assistant) out.push(cur);
   return out.slice(0, 24);
 }
+/**
+ * 让人格改动立刻生效：调用本地面板的 /api/personas/reload。
+ * 面板没开就跳过（下次启动会读新的 YAML），不算失败。
+ */
+async function reloadPersonas() {
+  const url = process.env.QQAGENT_PANEL || 'http://127.0.0.1:3081';
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 3000);
+    const res = await fetch(`${url}/api/personas/reload`, { method: 'POST', signal: ctl.signal });
+    clearTimeout(timer);
+    const text = (await res.text()).slice(0, 120);
+    if (res.ok) log(`已通知面板重载人格（HTTP ${res.status}）`);
+    else log(`重载人格失败（HTTP ${res.status}）：${text}，下次启动生效`);
+  } catch {
+    log('面板未运行，人格改动将在下次启动时生效');
+  }
+}
+
 // ---------------- import：笔记 -> 人格 ----------------
-function doImport(cfg) {
+async function doImport(cfg) {
   const personaPath = path.join(REPO, 'config', 'personas', `${cfg.persona}.yaml`);
   if (!fs.existsSync(personaPath)) fail(`找不到人格文件：${personaPath}`);
   const persona = parseYaml(fs.readFileSync(personaPath, 'utf8')) || {};
@@ -107,7 +126,8 @@ function doImport(cfg) {
     const body = readNote(cfg, rel);
     if (!body) { log(`跳过 ${field}：${rel} 内容为空`); continue; }
     const before = String(persona.structured[field] || '').trim();
-    if (before === body) { log(`${field}：无变化`); continue; }
+    // 字段 = 主笔记正文 + 后面追加的 extra 段落，所以只要以主笔记开头就算没变
+    if (before === body || before.startsWith(body)) { log(`${field}：无变化`); continue; }
     changes.push({ field, rel, chars: body.length });
     persona.structured[field] = `${body}\n`;
   }
@@ -149,7 +169,17 @@ function doImport(cfg) {
   const header = `# 由 Obsidian 角色库同步生成：${cfg.vault}\n# 修改请改 Obsidian 笔记，然后运行 scripts/obsidian-sync.mjs --import\n`;
   fs.writeFileSync(personaPath, header + stringifyYaml(persona), 'utf8');
   for (const c of changes) log(`已写入 ${c.field} ← ${c.rel}（${c.chars} 字）`);
-  log('人格文件已更新，重启 Agent 或面板「人格 → 重新加载」后生效');
+  await reloadPersonas();
+}
+
+/**
+ * 一条事实在笔记里的展示行。导出和追加共用，保证去重时能按 content 命中。
+ */
+function formatFact(r) {
+  const t = new Date(Number(r.created_at)).toLocaleDateString('zh-CN');
+  const scope = r.private ? '私密' : '共享';
+  const conf = typeof r.confidence === 'number' ? r.confidence.toFixed(2) : '?';
+  return `- ${t} · [${scope}] ${r.content}  \`置信 ${conf}\``;
 }
 
 // ---------------- export：事实 -> 笔记 ----------------
@@ -191,12 +221,7 @@ function doExport(cfg) {
     if (rows.length === 0) {
       lines.push('（当前没有长期事实。多聊几句后，agent 会自己抽取。）');
     } else {
-      for (const r of rows) {
-        const t = new Date(Number(r.created_at)).toLocaleDateString('zh-CN');
-        const scope = r.private ? '私密' : '共享';
-        const conf = typeof r.confidence === 'number' ? r.confidence.toFixed(2) : '?';
-        lines.push(`- ${t} · [${scope}] ${r.content}  \`置信 ${conf}\``);
-      }
+      for (const r of rows) lines.push(formatFact(r));
     }
     lines.push('', '## 相关', '', '- [[记忆索引]] · [[设定]]', '');
     const body = lines.join('\n');
@@ -206,10 +231,32 @@ function doExport(cfg) {
       return;
     }
 
+    const target = `${cfg.export.dir}/${title}.md`;
+    const vaultPath = path.join(cfg.vault, target.replace(/\//g, path.sep));
+
+    // 当天的笔记已经存在：只追加还没进过笔记的事实，绝不覆盖（CLI 也会拒绝改写）
+    if (fs.existsSync(vaultPath)) {
+      const prev = fs.readFileSync(vaultPath, 'utf8');
+      const fresh = rows.filter((r) => !prev.includes(r.content));
+      if (fresh.length === 0) {
+        log(`${target} 已是最新，无新事实`);
+        return;
+      }
+      const added = [
+        '',
+        `## ${now.toLocaleString('zh-CN')} 追加`,
+        '',
+        ...fresh.map(formatFact),
+        '',
+      ].join('\n');
+      const cliOut = runCli(cfg, ['append', target, '--body', added]);
+      log(`已追加 ${fresh.length} 条到 ${target}：${cliOut.split('\n')[0]}`);
+      return;
+    }
+
     const tmp = path.join(os.tmpdir(), `qqagent-facts-${Date.now()}.md`);
     fs.writeFileSync(tmp, body, 'utf8');
     try {
-      const target = `${cfg.export.dir}/${title}.md`;
       const cliOut = runCli(cfg, ['new', target, '--body-file', tmp]);
       log(`已创建 ${target}：${cliOut.split('\n')[0]}`);
       if (cfg.export.index) {
@@ -233,7 +280,7 @@ async function main() {
     log('用法：--import（笔记→人格） / --export（事实→笔记） / --dry（只看不改）');
     return;
   }
-  if (DO_IMPORT) doImport(cfg);
+  if (DO_IMPORT) await doImport(cfg);
   if (DO_EXPORT) await doExport(cfg);
 }
 

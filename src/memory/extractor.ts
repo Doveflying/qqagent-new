@@ -143,15 +143,20 @@ export class FactExtractor {
     }
 
     let added = 0;
+    const skipped = { short: 0, lowConfidence: 0, notExplicit: 0, badSource: 0, duplicate: 0 };
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
     signal?.throwIfAborted();
     for (const f of facts) {
       const content = f.content.trim();
-      if (!content || content.length < 3 || f.confidence < 0.8 || f.evidence !== 'explicit' || !userMsgs.some(m => m.id === f.sourceId)) continue;
+      if (!content || content.length < 3) { skipped.short++; continue; }
+      if (f.confidence < 0.8) { skipped.lowConfidence++; continue; }
+      if (f.evidence !== 'explicit') { skipped.notExplicit++; continue; }
+      if (!userMsgs.some(m => m.id === f.sourceId)) { skipped.badSource++; continue; }
 
       // 去重
       if (this.store.findSimilarFact(userId, content, scope)) {
+        skipped.duplicate++;
         this.log.debug({userId,contentChars:content.length}, '事实已存在，跳过');
         continue;
       }
@@ -177,9 +182,28 @@ export class FactExtractor {
     } catch (e) { this.store.db.exec('ROLLBACK'); throw e; }
     if (added > 0) {
       this.log.info({ scope, userId, added, total: facts.length }, `🧠 抽取了 ${added} 条长期记忆`);
+    } else if (facts.length > 0 || userMsgs.length > 0) {
+      // 抽到但全被过滤时也要留痕，否则无从判断是没抽还是被筛掉
+      this.log.info({ scope, userId, parsed: facts.length, msgs: userMsgs.length, skipped }, '🧠 事实抽取：本轮无新增');
     }
     return added;
   }
+}
+
+/** 把可能以字符串给出的整数转成 number（模型常把 id 写成 "382"）。 */
+function toSafeInt(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v.trim()) : NaN;
+  return Number.isSafeInteger(n) ? n : undefined;
+}
+
+/** evidence 归一化：模型可能写 explicit / 明确 / stated 等，统一成 explicit。 */
+function normalizeEvidence(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const s = v.trim().toLowerCase();
+  if (!s) return undefined;
+  if (s === 'explicit' || s === '明确' || s === 'stated' || s === 'direct' || s === 'explicitly') return 'explicit';
+  if (s === 'inferred' || s === '推测' || s === 'implicit' || s === 'guess') return 'inferred';
+  return s;
 }
 
 /** 稳健解析事实 JSON 数组 */
@@ -218,9 +242,9 @@ export function parseFactsJson(raw: string): ExtractedFact[] {
       const confRaw = typeof o['confidence'] === 'number' ? o['confidence'] : Number(o['confidence']);
       return {
         factType: type,
-        replacesId: Number.isSafeInteger(o.replacesId) ? Number(o.replacesId) : undefined,
-        sourceId: Number.isSafeInteger(o.sourceId) ? Number(o.sourceId) : undefined,
-        evidence: typeof o.evidence === 'string' ? o.evidence : undefined,
+        replacesId: toSafeInt(o['replacesId']),
+        sourceId: toSafeInt(o['sourceId']),
+        evidence: normalizeEvidence(o['evidence']),
         content,
         keywords: String(o['keywords'] ?? '').trim(),
         confidence: Number.isFinite(confRaw) ? Math.max(0, Math.min(1, confRaw)) : 0.7,
