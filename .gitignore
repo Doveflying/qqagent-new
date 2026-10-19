@@ -62,3 +62,4 @@ tools/seed-vc/
 refs/*.wav
 refs/*.mp3
 outputs/
+config/proactive.local.json

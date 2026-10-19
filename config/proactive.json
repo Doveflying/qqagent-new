@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "persona": "shiori",
+  "llm": {
+    "providerKey": "deepseek",
+    "model": "deepseek-flash"
+  },
+  "napcat": {
+    "url": "ws://127.0.0.1:3001"
+  },
+  "target": {
+    "users": []
+  },
+  "limits": {
+    "perDay": 1,
+    "minGapHours": 10,
+    "activeFrom": "10:30",
+    "activeTo": "23:00",
+    "skipIfUserActiveMinutes": 45
+  },
+  "style": {
+    "minChars": 4,
+    "maxChars": 40
+  }
+}

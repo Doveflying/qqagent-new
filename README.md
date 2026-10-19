@@ -12,6 +12,8 @@
 |---|---|
 | **桌面控制台** | `app/QQAgent.exe`（C# WinForms，12 KB，零安装）：实时状态、一键启停、强制重登、打开面板、手动发动态 |
 | **自发动态** | 按人格自己写 QQ 空间说说，每天最多 1 条、随机时段、可配间隔；空间失败自动改发私聊 |
+| **主动私聊** | `scripts/proactive-dm.mjs`：每天最多 1 条、活跃窗口内随机时间、正在聊天时自动顺延；内容参考最近对话，用她自己的口吻开口 |
+| **角色库同步** | Obsidian 笔记是设定源头，`scripts/obsidian-sync.mjs` 每 10 分钟把人设同步进人格 YAML 并热重载，聊天抽取的长期事实反向导出成笔记 |
 | **语音代理** | `scripts/voice-boost.mjs`（:3910）：中文→目标语言翻译、前瞻限幅提升响度、本地 VoiceStudio 与云端 CosyVoice 自动回落 |
 | **假在线检测** | 看门狗改用 `bkn` 而非 `get_status.online` 判断会话健康；后者在会话失效时仍是 true，是消息发送与空间发布失败的共同根因 |
 | **登录自愈** | 快速登录令牌过期、QQ 内核僵死时，一条命令重建会话并重新扫码 |
@@ -212,6 +214,44 @@ napcat:
 ```
 
 `keep` 是默认方式，保留当前话题，旧人格回复作为历史资料；`new` 创建新话题，旧话题保留，可通过 `/topics` 切回。两种切换都会取消旧的在途任务。
+
+### 用 Obsidian 维护人设
+
+人设的源头可以是 Obsidian 笔记。配置放在 `config/obsidian.json`，写清 vault 路径、`obsidian-bridge` CLI 路径和每段设定对应哪篇笔记：
+
+```json
+{
+  "persona": "shiori",
+  "import": {
+    "identity": "角色/宫城志绪理/设定.md",
+    "speakingStyle": "角色/宫城志绪理/口癖.md",
+    "interactionStyle": "角色/宫城志绪理/关系.md",
+    "examples": "角色/宫城志绪理/示例对话.md",
+    "extra": [
+      { "into": "identity", "note": "角色/宫城志绪理/日常.md" },
+      { "into": "interactionStyle", "note": "角色/宫城志绪理/雷点.md" }
+    ]
+  },
+  "export": { "dir": "角色/宫城志绪理/记忆", "index": "角色/宫城志绪理/记忆/记忆索引.md", "db": "data/brain.db" }
+}
+```
+
+```bash
+node scripts/obsidian-sync.mjs --import   # 笔记 -> 人格 YAML，并通知面板热重载
+node scripts/obsidian-sync.mjs --export   # 长期事实 -> 记忆/事实-YYYY-MM-DD.md（只追加）
+node scripts/obsidian-sync.mjs --dry      # 只看会改什么
+```
+
+启动器把它挂在调度循环里，每 10 分钟跑一次，所以改完笔记不用手动操作，也不必重启 Agent。人格 YAML 是产物，直接改会在下一轮被笔记覆盖。
+
+### 主动私聊
+
+```bash
+node scripts/proactive-dm.mjs --dry     # 只生成看内容
+node scripts/proactive-dm.mjs --force   # 立刻发一条
+```
+
+`config/proactive.json` 控制开关、人格、每日上限（默认 1 条）、最小间隔（默认 10 小时）和活跃窗口（默认 10:30–23:00）。目标 QQ 放在 `config/proactive.local.json` 里，不进版本库。最近 45 分钟内你还在聊天就不会打扰，目标时间自动往后顺延。发送状态记在 `config/proactive.state.json`。
 
 ### 指令表
 
