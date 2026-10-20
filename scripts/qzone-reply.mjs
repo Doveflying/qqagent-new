@@ -106,15 +106,28 @@ function callOneBot(url, action, params, timeoutMs = 20000) {
 async function session(napcatUrl) {
   const data = await callOneBot(napcatUrl, 'get_cookies', { domain: 'qzone.qq.com' }, 15000);
   const cookies = typeof data === 'string' ? data : (data.cookies || data.data || '');
-  const skey = cookieValue(cookies, 'skey') || cookieValue(cookies, 'p_skey');
+  // 空间的 g_tk 要用 p_skey 算；skey 算出来的会被判参数错误
+  const skey = cookieValue(cookies, 'p_skey') || cookieValue(cookies, 'skey');
   const selfUin = (cookieValue(cookies, 'uin') || cookieValue(cookies, 'p_uin')).replace(/^o0*/, '');
   if (!cookies || !skey) throw new Error('拿不到有效的 qzone cookie/skey（会话可能已失效）');
   return { cookies, gtk: bkn(skey), selfUin };
 }
 
+/**
+ * 剥 Qzone 的 JSON 壳：可能是纯 JSON、_Callback({...})、也可能是
+ * <html><script>frameElement.callback({...})</script> 这种 HTML 包一层。
+ * 解析不出来就抛错——以前解析失败被当成"没 code 就是成功"，导致假成功。
+ */
 function parseJsonp(text) {
-  const clean = text.replace(/^_Callback\(/, '').replace(/\);?\s*$/, '').trim();
-  return JSON.parse(clean);
+  const s = String(text).trim();
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end <= start) throw new Error(`响应里没有 JSON：${s.slice(0, 120)}`);
+  try {
+    return JSON.parse(s.slice(start, end + 1));
+  } catch (e) {
+    throw new Error(`响应不是合法 JSON：${s.slice(0, 120)}`);
+  }
 }
 
 /** 读某人最近的说说 */
@@ -139,24 +152,35 @@ async function listPosts(s, uin, num = 5) {
   })).filter((m) => m.tid && m.content);
 }
 
-/** 评论一条说说 */
+/** 评论一条说说。
+ *
+ * 端点是 h5.qzone.qq.com 的 emotion_cgi_re_feeds，topicId 必须是
+ * `<宿主uin>_<tid>__1` 这种拼法；用 user.qzone.qq.com 的
+ * emotion_cgi_comment_v6 会稳定返回 code:-3 参数错误。
+ * 响应被 <html><script>frameElement.callback({...}) 包着，必须剥壳再判断 code/subcode。
+ */
 async function comment(s, targetUin, tid, content) {
   const body = new URLSearchParams({
-    topicId: tid,
-    uin: s.selfUin,
-    feedsType: '100',
-    targetUin: String(targetUin),
-    content,
-    format: 'json',
-    plat: 'qzone',
-    source: 'ic',
-    hostUin: String(targetUin),
+    qzreferrer: `https://user.qzone.qq.com/${s.selfUin}`,
     inCharset: 'utf-8',
     outCharset: 'utf-8',
+    hostUin: String(targetUin),
+    format: 'json',
     ref: 'feeds',
-    g_tk: String(s.gtk),
+    topicId: `${targetUin}_${tid}__1`,
+    feedsType: '100',
+    private: '0',
+    paramstr: '1',
+    richtype: '',
+    richval: '',
+    isSignIn: '',
+    uin: s.selfUin,
+    content,
+    plat: 'qzone',
+    source: 'ic',
+    platformid: '52',
   });
-  const url = `https://user.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_comment_v6?g_tk=${s.gtk}`;
+  const url = `https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_re_feeds?g_tk=${s.gtk}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -168,13 +192,13 @@ async function comment(s, targetUin, tid, content) {
     signal: AbortSignal.timeout(25000),
   });
   const text = await res.text();
-  let doc = null;
-  try { doc = JSON.parse(text); } catch { doc = null; }
-  const code = doc?.code ?? doc?.subcode;
-  if (!res.ok || (code !== undefined && code !== 0)) {
-    throw new Error(`评论失败 HTTP ${res.status} code=${code} ${(doc?.message || text).slice(0, 120)}`);
+  const doc = parseJsonp(text);
+  const code = doc?.code ?? 0;
+  const subcode = doc?.subcode ?? 0;
+  if (!res.ok || code !== 0 || subcode !== 0) {
+    throw new Error(`评论失败 HTTP ${res.status} code=${code} subcode=${subcode} ${(doc?.message || text).slice(0, 120)}`);
   }
-  return doc ?? {};
+  return doc;
 }
 
 async function generateComment(cfg, post, who) {
