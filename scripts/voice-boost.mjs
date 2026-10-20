@@ -273,10 +273,13 @@ async function synthCloud(payload) {
   const cloud = cfg.cloud ?? {};
   const creds = providerCreds(cloud.providerKey);
   if (!creds?.apiKey) throw new Error('cloud provider key missing');
+  // 每个音色可以有自己复刻出来的云端 id（cloud.voices 映射）；没有映射就用默认 cloud.voice
+  const requested = String(payload.voice ?? '');
+  const mapped = requested && cloud.voices?.[requested] ? cloud.voices[requested] : cloud.voice;
   const body = {
     model: cloud.model,
     input: payload.input,
-    voice: cloud.voice,
+    voice: mapped,
     response_format: 'wav',
     speed: payload.speed ?? 1,
   };

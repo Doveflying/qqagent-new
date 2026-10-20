@@ -67,6 +67,8 @@ providers:
 | QQ 空间自动评论 | 机器人 QQ 能访问目标空间即可，配 `config/qzone-reply.json` |
 | 主动私聊 / 自发说说 | 改 `config/proactive.json`、`config/self-post.json` 里的目标 QQ |
 
+> 人格里写的 `voice:` 是**音色 id**，只在装了同一套 VoiceStudio 音色的机器上有效。换机器要么重建音色，要么把人格里的 `voice.voice` 清空，改用面板里配的全局默认音色。
+
 ---
 
 ## 放到云服务器（不用开电脑）

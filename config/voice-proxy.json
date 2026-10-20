@@ -20,6 +20,10 @@
     "baseURL": "https://api.siliconflow.cn/v1",
     "model": "FunAudioLLM/CosyVoice2-0.5B",
     "voice": "speech:shiori24:d9atenucnncc73fcn05g:uhtaensjfbhfuepbwrpk",
-    "note": "本地不可用时由代理内部回落到云端复刻音色，仍保持目标语言"
+    "note": "云端复刻音色映射：按请求的 voice id 选对应复刻音色；没有映射时用 cloud.voice",
+    "voices": {
+      "d917c46b": "speech:shiori24:d9atenucnncc73fcn05g:uhtaensjfbhfuepbwrpk",
+      "cda9363f": "speech:arisa:d9atenucnncc73fcn05g:ypveozjxhcxtkakqeimx"
+    }
   }
 }
