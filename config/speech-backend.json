@@ -10,7 +10,7 @@
   "cloud": {
     "provider": "siliconflow",
     "model": "FunAudioLLM/CosyVoice2-0.5B",
-    "voice": "FunAudioLLM/CosyVoice2-0.5B:alex",
-    "note": "云端硬基流动，VoiceStudio 或响度代理不在线时用它"
+    "voice": "speech:shiori24:d9atenucnncc73fcn05g:uhtaensjfbhfuepbwrpk",
+    "note": "云端硅基流动复刻音色，由 scripts/sf-clone-voice.mjs 生成；绑定本账号，参考音必须 ≤30 秒"
   }
 }

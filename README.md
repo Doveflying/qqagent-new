@@ -313,6 +313,20 @@ node scripts/proactive-dm.mjs --force   # 立刻发一条
 
 详见[语音与定时任务配置](docs/voice-and-scheduled-tasks.md)。
 
+## 云端音色复刻（硅基流动）
+
+本地 VoiceStudio 的音色 id（如 `d917c46b`）是 omnivoice 的模型内部编号，硅基流动用不了。要在云端用同一个声音，走「上传参考音频」复刻一次：
+
+```powershell
+node scripts\sf-clone-voice.mjs --dry                                            # 先看转写出来的参考文本
+node scripts\sf-clone-voice.mjs --ref refs\voice-cn-24s.wav --name shiori --write  # 复刻并写进 speech-backend.json
+```
+
+- 参考音频**必须 ≤30 秒**，超了合成会报 `audio longer than 30s is not supported`；`refs/voice-cn.wav` 是 30.4 秒，要先用 ffmpeg 裁到 24 秒再复刻。
+- 接口要求同时给「参考音频对应的原话」，脚本默认先用 SenseVoice 转写，转得不准就用 `--text` 手动给。
+- 返回的 `voice` 形如 `speech:shiori24:xxx:yyy`，绑定账号，换账号要重新复刻。
+- 复刻后 `config/speech-backend.json` 的 `cloud.voice` 就是它：本机 VoiceStudio 掉线时走这个音色，云服务器上则直接用它当主 TTS。
+
 ## 唱歌（SVC 音色转换）
 
 用 Seed-VC v2 做零样本音色转换：给一段人声和一段参考音色，输出「她唱的」版本。不需要训练模型。
