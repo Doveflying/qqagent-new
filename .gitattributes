@@ -1,3 +1,7 @@
 # Keep CRLF bytes in Git blobs so Download ZIP also works in cmd.exe.
 *.bat -text
 *.cmd -text
+
+# 服务端脚本必须 LF：Windows 检出带 CRLF 的 .sh，跑到 Linux 上会报 $'\r': command not found
+*.sh text eol=lf
+*.mjs text eol=lf
