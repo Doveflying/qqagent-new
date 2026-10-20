@@ -18,6 +18,31 @@ sudo bash 04-panel.sh '你的密码'
 
 不想暴露端口时删掉 `/etc/nginx/conf.d/qqagent-panel.conf` 并 `systemctl reload nginx` 即可回到只走 SSH 隧道。
 
+## 多个账号（给朋友用）
+
+一个 QQ 号必须对应一整套：**它自己的 QQ 客户端**（NapCat 容器里的 QQ，约 330 MB）+ **它自己的 agent 进程**（约 140 MB）+ 独立数据库和 API Key。所以「加一个号」= 再加一套实例：
+
+```bash
+sudo bash 05-instance.sh 2 '面板密码' [管理员QQ]
+```
+
+| 序号 | 目录 | OneBot | WebUI | 面板 |
+|---|---|---|---|---|
+| 1 | `/opt/qqagent` | 3001 | 6099 | 8443 |
+| 2 | `/opt/qqagent2` | 3002 | 6100 | 8445 |
+| 3 | `/opt/qqagent3` | 3003 | 6101 | 8446 |
+
+端口规律：OneBot `3000+N`、WebUI `6099+N`、面板 `8443+N`。
+
+脚本做的事：复制代码（排除 data/logs/runtime/私有配置）→ 改 `server.port` 和 `napcat.url` → 关掉 TTS（没有语音代理）→ 用 `MODE=ws` 起独立 NapCat 容器（启动即生成 WS 配置，省掉"改配置再重启再扫码"）→ 建独立 systemd 单元和面板 vhost。
+
+两个坑，脚本已处理但值得记住：
+
+- 真正的配置键是 **`server.port`** 和 **`napcat.url`**。写成 `web.port` / `onebot.url` 会被静默忽略，然后两套实例抢 3081 端口
+- 复制代码时必须排除 **`runtime/`**，否则实例 2 读到实例 1 的 `agent.pid`，直接判定"已有实例在运行"然后退出
+
+新实例的 API Key 是空的（`config/providers.local.yaml` 占位），朋友登录自己的面板后填。内存：两套约 1.2 GB，1.6 GB 机器要靠 swap 撑，会偏慢；4 GB 更稳。
+
 ## 当前实例（已部署）
 
 | 项 | 值 |
