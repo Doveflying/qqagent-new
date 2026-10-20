@@ -16,6 +16,9 @@ node scripts/self-post.mjs >> logs/self-post.log 2>&1
 # 主动私聊：每天最多一条；你在聊天就不打扰
 node scripts/proactive-dm.mjs >> logs/proactive.log 2>&1
 
+# 回复空间动态：watch 白名单里的人发新说说就评论一句
+node scripts/qzone-reply.mjs >> logs/qzone.log 2>&1
+
 # 注意：以下这些在云端不需要
 #   obsidian-sync  → config/obsidian.json 是 Windows 路径，vault 没搬上来
 #   speech-backend → 云端没有 VoiceStudio，siliconflow 复刻音色直接就是主 TTS
