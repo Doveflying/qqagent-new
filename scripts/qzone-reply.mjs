@@ -149,6 +149,12 @@ async function listPosts(s, uin, num = 5) {
     content: stripTags(m.content),
     createdAt: Number(m.created_time ?? 0) * 1000,
     commentCount: Number(m.cmntnum ?? m.commentlist?.length ?? 0),
+    comments: (m.commentlist ?? []).map((c) => ({
+      uin: Number(c.uin ?? 0),
+      name: String(c.name ?? ''),
+      content: stripTags(c.content),
+      createdAt: Number(c.create_time ?? 0) * 1000,
+    })).filter((c) => c.content),
   })).filter((m) => m.tid && m.content);
 }
 
@@ -236,6 +242,44 @@ async function generateComment(cfg, post, who) {
   return text.slice(0, max + 10);
 }
 
+/** 生成一条"回复别人评论"的话 */
+async function generateCommentReply(cfg, post, c) {
+  const creds = providerCreds(cfg.llm?.providerKey);
+  if (!creds?.apiKey) throw new Error(`供应商 ${cfg.llm?.providerKey} 没有可用的 API Key`);
+  const min = cfg.style?.minChars ?? 3;
+  const max = cfg.style?.maxChars ?? 30;
+  const system = [
+    personaPrompt(cfg.persona),
+    '',
+    '你之前发了一条说说，现在有人在下面评论了。你要回他一句。',
+    `要求：${min}~${max} 字，一句话，口语；可以顺着他说、反驳他、或者只吐槽其中一个点；`,
+    '不用客套，不用 emoji，别问一堆问题，直接输出回复正文。',
+  ].join('\n');
+  const user = [
+    `你的说说：${post.content.slice(0, 200)}`,
+    `${c.name || '对方'}的评论：${c.content.slice(0, 200)}`,
+    '',
+    '写你的回复。',
+  ].join('\n');
+  const res = await fetch(`${creds.baseURL}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${creds.apiKey}` },
+    body: JSON.stringify({
+      model: cfg.llm?.model || 'deepseek-flash',
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      temperature: 0.95,
+      max_tokens: 1000,
+    }),
+    signal: AbortSignal.timeout(45000),
+  });
+  if (!res.ok) throw new Error(`模型返回 ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const doc = await res.json();
+  let text = String(doc?.choices?.[0]?.message?.content ?? '').trim();
+  text = text.replace(/^[\s"'`「『（(\[]+/, '').replace(/[\s"'`」』）)\]]+$/, '').replace(/\s*\n+\s*/g, ' ').trim();
+  if (!text) throw new Error('模型返回空回复');
+  return text.slice(0, max + 10);
+}
+
 async function main() {
   const cfg = readJson(CFG_PATH);
   if (!cfg) fail(`读不到配置 ${CFG_PATH}`);
@@ -307,9 +351,70 @@ async function main() {
     state.seen[uin] = seen.slice(-100);
   }
 
+  // ---- 回复她自己的说说下面、白名单里的人的评论 ----
+  // Qzone 的评论没有 id（只有 uin + create_time + content），所以去重用这三样拼
+  const rc = cfg.replyComments ?? {};
+  let replied = 0;
+  if (rc.enabled !== false) {
+    const watchComments = (rc.watch ?? watch.map((w) => w.uin)).map(Number);
+    const rcPerDay = Number(rc.perDay ?? 3);
+    const rcGapMs = Number(rc.minGapMinutes ?? 5) * 60 * 1000;
+    const maxAgeH = Number(rc.maxAgeHours ?? 24);
+    state.replySeen ??= {};
+    state.replyCount ??= 0;
+    state.replyDayKey ??= today;
+    if (state.replyDayKey !== today) { state.replyDayKey = today; state.replyCount = 0; }
+
+    const canReply = FORCE || DRY || (state.replyCount < rcPerDay && (!state.replyLastAt || now - state.replyLastAt >= rcGapMs));
+    if (canReply) {
+      let own = [];
+      try { own = await listPosts(s, Number(s.selfUin), Number(rc.scanPosts ?? 5)); }
+      catch (e) { log(`读自己的说说失败：${e.message}`); }
+
+      for (const post of own) {
+        if (state.replyCount >= rcPerDay && !DRY) break;
+        for (const c of post.comments) {
+          if (c.uin === Number(s.selfUin)) continue;                 // 自己的评论不回
+          if (!watchComments.includes(c.uin)) continue;              // 只回白名单
+          const key = `${post.tid}|${c.uin}|${c.createdAt}`;
+          if ((state.replySeen[key] ?? false) === true) continue;
+          if (now - c.createdAt > maxAgeH * 3600000) { state.replySeen[key] = true; continue; }
+
+          let text;
+          try { text = await generateCommentReply(cfg, post, c); }
+          catch (e) { log(`生成回复失败：${e.message}`); continue; }
+          log(`${c.name || c.uin} 评论了她的说说：${c.content.slice(0, 30)}`);
+          log(`  → 回复：${text}`);
+
+          if (DRY) { state.replySeen[key] = true; continue; }
+          try {
+            await comment(s, Number(s.selfUin), post.tid, text);
+            state.replySeen[key] = true;
+            state.replyCount += 1;
+            state.replyLastAt = Date.now();
+            state.replyLastText = text;
+            replied += 1;
+            log(`  ✓ 已回复`);
+          } catch (e) {
+            log(`  ✗ ${e.message}`);
+          }
+          if (state.replyCount >= rcPerDay) break;
+        }
+      }
+      // 只保留最近 200 条，避免状态文件无限膨胀
+      const keys = Object.keys(state.replySeen);
+      if (keys.length > 200) {
+        const drop = keys.slice(0, keys.length - 200);
+        for (const k of drop) delete state.replySeen[k];
+      }
+    } else {
+      log('回复评论：今天额度用完或间隔未到，跳过');
+    }
+  }
+
   // dry 不落盘：否则试跑一次就把这些 tid 记成"已回复"，之后真跑什么都不做
   if (!DRY) writeJson(STATE_PATH, state);
-  log(`完成，本次评论 ${acted} 条，今天共 ${state.count} 条`);
+  log(`完成，本次评论 ${acted} 条、回复 ${replied} 条；今天评论 ${state.count}/${perDay}、回复 ${state.replyCount ?? 0}`);
 }
 
 main().catch((e) => { console.error(`[qzone] 失败：${e?.message ?? e}`); process.exit(1); });

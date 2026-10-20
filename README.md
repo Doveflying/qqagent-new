@@ -313,6 +313,28 @@ node scripts/proactive-dm.mjs --force   # 立刻发一条
 
 详见[语音与定时任务配置](docs/voice-and-scheduled-tasks.md)。
 
+## QQ 空间互动（评论 / 回复评论）
+
+NapCat 只提供发说说（`send_qzone_msg`），没有评论接口，所以读和写都走空间 Web 接口：用 OneBot `get_cookies` 拿到的 cookie + `p_skey` 算出 `g_tk` 签名。
+
+```powershell
+node scripts\qzone-reply.mjs --dry     # 只看会评论/回复什么
+node scripts\qzone-reply.mjs --force   # 立刻跑一次
+```
+
+配置在 `config/qzone-reply.json`：
+
+- `watch`：评论**谁的新说说**（`uin` + `name`）
+- `limits`：`perDay` 每天最多几条、`minGapMinutes` 间隔、`maxAgeDays` 只回几天内的新动态
+- `replyComments`：**别人评论了她的说说**时回一句（`watch` 填回复谁，`perDay` / `minGapMinutes` / `maxAgeHours` 独立限速）
+
+两个接口细节（踩过）：
+
+- 评论必须用 `h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_re_feeds`，`topicId` 拼成 `<宿主uin>_<tid>__1`；用 `user.qzone.qq.com` 的 `emotion_cgi_comment_v6` 永远返回 `code:-3 参数错误`
+- 响应可能被 `<html><script>frameElement.callback({...})</script>` 包住，**必须剥壳再判 `code`/`subcode`**，否则解析失败会被当成成功（这个坑导致过"日志说已评论、空间里其实什么都没有"）
+
+Qzone 的评论只有 `uin` + `create_time` + `content`，**没有评论 id**，所以去重靠这三样拼键，也没法做成嵌套回复——她的回复会作为同一条说说下的新评论出现。
+
 ## 云端音色复刻（硅基流动）
 
 本地 VoiceStudio 的音色 id（如 `d917c46b`）是 omnivoice 的模型内部编号，硅基流动用不了。要在云端用同一个声音，走「上传参考音频」复刻一次：

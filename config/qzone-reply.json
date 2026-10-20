@@ -17,6 +17,14 @@
     "maxAgeDays": 2,
     "scanPosts": 5
   },
+  "replyComments": {
+    "enabled": true,
+    "watch": [2731758714],
+    "perDay": 3,
+    "minGapMinutes": 5,
+    "maxAgeHours": 24,
+    "scanPosts": 5
+  },
   "style": {
     "minChars": 3,
     "maxChars": 30
