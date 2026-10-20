@@ -37,7 +37,8 @@ chown -R "$USER_NAME":"$USER_NAME" "$DIR"
 
 echo "== 3/5 装依赖并编译 =="
 cd "$DIR"
-sudo -u "$USER_NAME" bash -lc 'cd /opt/qqagent && npm ci --ignore-scripts && npm run build'
+# 国内服务器直连 npmjs 经常卡住，走 npmmirror
+sudo -u "$USER_NAME" bash -lc 'cd /opt/qqagent && npm config set registry https://registry.npmmirror.com && npm ci --ignore-scripts && npm run build'
 
 echo "== 4/5 时区、本地覆盖、systemd =="
 # 主动私聊按 10:30-23:00 选时间，服务器不是东八区就会半夜发消息

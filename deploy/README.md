@@ -2,6 +2,27 @@
 
 目标：服务器上跑 QQ(NapCat) + Agent，电脑关机也能回消息。
 
+## 当前实例（已部署）
+
+| 项 | 值 |
+|---|---|
+| 主机 | `39.106.128.9`（阿里云 ECS，`iZ2ze5u34qp6t3pgoolc93Z`） |
+| 系统 | Rocky Linux 9.8 / 2 核 / 1.6 GB + 2 GB swap / 40 GB |
+| 登录 | `ssh -i .ssh/id_ed25519 root@39.106.128.9` |
+| 面板 | `ssh -L 3081:127.0.0.1:3081 root@39.106.128.9` 后开 http://127.0.0.1:3081 |
+| 路径 | 代码 `/opt/qqagent`，日志 `/opt/qqagent/logs`，服务 `qqagent.service` + `qqagent-cron.timer` |
+| 语音 | 本地没有 VoiceStudio，TTS 走硅基流动复刻音色 `speech:shiori24:...` |
+
+本机改完代码要同步时：
+
+```powershell
+powershell -File deploy\pack.ps1
+scp qqagent-deploy.tar.gz root@39.106.128.9:/root/
+ssh ... root@39.106.128.9 "cd /opt/qqagent && tar xzf /root/qqagent-deploy.tar.gz && chown -R qqagent:qqagent /opt/qqagent && sudo -u qqagent npm ci --ignore-scripts && sudo -u qqagent npm run build && systemctl restart qqagent"
+```
+
+日常体检：`powershell -File deploy\run-remote.ps1 deploy\status.sh`
+
 ## 会变的东西（先看这段）
 
 | 能力 | 云端 | 原因 |
@@ -86,11 +107,31 @@ curl -s 127.0.0.1:3081/api/health | head -c 200
 
 ## 常见问题
 
+**OneBot 连不上（`napcatConnected: false`）**：NapCat 的 docker 镜像默认 `websocketServers` 是**空的**，端口发布了也不等于有 WS 服务。要在 `/app/napcat/config/onebot11_<QQ号>.json` 里加一段：
+
+```json
+"websocketServers": [{ "name": "qqagent", "enable": true, "host": "0.0.0.0", "port": 3001,
+  "messagePostFormat": "array", "reportSelfMessage": false, "token": "",
+  "enableForcePushEvent": true, "debug": false, "heartInterval": 30000 }]
+```
+
+改完必须 `docker restart napcat`，而且 **WS 要等 QQ 登录成功后才会监听**（日志出现 `[WebSocket Server] Server Started :::3001` 才算好）。
+
+**重启容器后要重新扫码**：容器重启时 NapCat 没有可用的快速登录令牌（日志 `可用于快速登录 of QQ：` 后面是空的），只能重扫。所以**能不动容器就别动**；要改配置尽量一次改完。
+
 **扫码后立刻掉线**：NapCat 容器里的 QQ 版本和手机端不匹配，`docker logs napcat` 里会写；更新镜像 `docker pull mlikiowa/napcat-docker:latest && docker restart napcat`。
 
-**`npm ci` 报错**：Node 版本低于 22；`node -v` 确认，`engines` 要求 >= 22.16。
+**`npm ci` 报错**：Node 版本低于 22；`node -v` 确认，`engines` 要求 >= 22.16。国内服务器要设 `npm config set registry https://registry.npmmirror.com`（`02-agent.sh` 已经设了）。
 
-**语音不发**：服务器上没有本地 TTS，`config/speech-backend.json` 的云端回落要指向可用的语音服务；先用 `/voice` 指令看当前音色状态。
+**语音不发**：云端没有 VoiceStudio，`llm.roles.tts` 必须指向 `siliconflow`，`speech.tts.voice` 填复刻出来的 `speech:xxx` uri，`format` 用 `mp3`。用面板 API 改（key 是点号路径）：
+
+```bash
+curl -X POST 127.0.0.1:3081/api/settings -H 'Content-Type: application/json' -d '{"patch":{
+  "llm.roles.tts.provider":"siliconflow",
+  "llm.roles.tts.model":"FunAudioLLM/CosyVoice2-0.5B",
+  "speech.tts.voice":"speech:shiori24:...",
+  "speech.tts.format":"mp3"}}'
+```
 
 **数据库锁住**：`data/brain.db-wal` 被一起打包会让副本不一致——`pack.ps1` 已经排掉了；如果拿到旧包，删掉 `data/brain.db-wal`、`data/brain.db-shm`。
 
