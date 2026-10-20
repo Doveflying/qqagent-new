@@ -39,7 +39,20 @@ echo "== 3/5 装依赖并编译 =="
 cd "$DIR"
 sudo -u "$USER_NAME" bash -lc 'cd /opt/qqagent && npm ci --ignore-scripts && npm run build'
 
-echo "== 4/5 systemd =="
+echo "== 4/5 时区、本地覆盖、systemd =="
+# 主动私聊按 10:30-23:00 选时间，服务器不是东八区就会半夜发消息
+timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+
+# 目标 QQ 不进版本库，用环境变量传：PROACTIVE_UID=2731758714 bash 02-agent.sh ...
+if [ -n "${PROACTIVE_UID:-}" ]; then
+  printf '{\n  "target": { "users": [%s] }\n}\n' "$PROACTIVE_UID" > "$DIR/config/proactive.local.json"
+  printf '{\n  "target": { "users": [%s] }\n}\n' "$PROACTIVE_UID" > "$DIR/config/self-post.local.json"
+  chown "$USER_NAME":"$USER_NAME" "$DIR/config/proactive.local.json" "$DIR/config/self-post.local.json"
+  echo "   已写入目标 QQ：$PROACTIVE_UID"
+else
+  echo "   [i] 没给 PROACTIVE_UID，主动私聊和说说私聊回落会跳过（私聊目标为空）"
+fi
+
 cat >/etc/systemd/system/qqagent.service <<'EOF'
 [Unit]
 Description=QQ Agent
@@ -51,6 +64,7 @@ Type=simple
 User=qqagent
 WorkingDirectory=/opt/qqagent
 Environment=NODE_ENV=production
+Environment=TZ=Asia/Shanghai
 ExecStart=/usr/bin/node dist/src/index.js
 Restart=always
 RestartSec=5
@@ -60,16 +74,48 @@ StandardError=append:/opt/qqagent/logs/stderr.log
 [Install]
 WantedBy=multi-user.target
 EOF
+
+cat >/etc/systemd/system/qqagent-cron.service <<'EOF'
+[Unit]
+Description=QQ Agent 例行任务（说说 / 主动私聊）
+After=qqagent.service
+
+[Service]
+Type=oneshot
+User=qqagent
+WorkingDirectory=/opt/qqagent
+Environment=TZ=Asia/Shanghai
+ExecStart=/usr/bin/bash /opt/qqagent/deploy/cron.sh
+EOF
+
+cat >/etc/systemd/system/qqagent-cron.timer <<'EOF'
+[Unit]
+Description=每 10 分钟跑一次 QQ Agent 例行任务
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 mkdir -p "$DIR/logs" && chown -R "$USER_NAME":"$USER_NAME" "$DIR/logs"
 systemctl daemon-reload
 systemctl enable --now qqagent
+systemctl enable --now qqagent-cron.timer
 
 echo "== 5/5 状态 =="
 sleep 6
 systemctl --no-pager --lines=15 status qqagent || true
+echo "--- 例行任务 ---"
+systemctl list-timers qqagent-cron.timer --no-pager || true
 echo
 echo "面板只在 127.0.0.1:3081，从本机连隧道看："
 echo "  ssh -L 3081:127.0.0.1:3081 <user>@<server>"
 echo "  然后浏览器开 http://127.0.0.1:3081"
 echo
 echo "日志：journalctl -u qqagent -f   （或 tail -f /opt/qqagent/logs/stdout.log）"
+echo "说说/主动私聊：tail -f /opt/qqagent/logs/self-post.log /opt/qqagent/logs/proactive.log"

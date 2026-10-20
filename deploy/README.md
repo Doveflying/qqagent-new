@@ -26,8 +26,17 @@ scp qqagent-deploy.tar.gz root@SERVER_IP:/root/
 ```bash
 sudo bash 01-napcat.sh    # 装 docker + 起 NapCat
 # 浏览器开 http://公网IP:6099/webui 扫码登录机器人 QQ，登录完关掉 6099 的端口
-sudo bash 02-agent.sh /root/qqagent-deploy.tar.gz
+sudo PROACTIVE_UID=你的QQ号 bash 02-agent.sh /root/qqagent-deploy.tar.gz
 ```
+
+`PROACTIVE_UID` 决定「自发说说」和「主动私聊」发给谁。不给也能跑，但这两项会因为没有目标而跳过。
+
+`02-agent.sh` 会装两个 systemd 单元：
+
+- `qqagent.service`：Agent 本体，挂了自动重启
+- `qqagent-cron.timer`：每 10 分钟跑 `deploy/cron.sh`（自发说说 + 主动私聊），对应 Windows 上的 `model-schedule-loop.cmd`
+
+时区会被设成 `Asia/Shanghai`，因为主动私聊按 10:30–23:00 选时间，服务器在 UTC 会变成半夜发。
 
 看面板（不要给公网开 3081）：
 
