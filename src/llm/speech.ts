@@ -45,11 +45,67 @@ export async function boundedBody(response: Response, max: number): Promise<Buff
     return Buffer.concat(chunks, size);
 }
 export function pcmToWav(pcm: Buffer, rate = 24000): Buffer { const header = Buffer.alloc(44); header.write('RIFF'); header.writeUInt32LE(pcm.length + 36, 4); header.write('WAVEfmt ', 8); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22); header.writeUInt32LE(rate, 24); header.writeUInt32LE(rate * 2, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(pcm.length, 40); return Buffer.concat([header, pcm]); }
+/** 估算音频时长（秒）：WAV 按头部精确算，其它格式按 128 kbps 粗估。 */
+export function audioSeconds(bytes: Buffer): number {
+    if (bytes.length >= 44 && bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE') {
+        const channels = bytes.readUInt16LE(22) || 1;
+        const rate = bytes.readUInt32LE(24) || 24000;
+        const bits = bytes.readUInt16LE(34) || 16;
+        const sec = Math.max(0, bytes.length - 44) / (rate * channels * (bits / 8));
+        if (Number.isFinite(sec) && sec > 0)
+            return sec;
+    }
+    return bytes.length * 8 / 128000;
+}
+/**
+ * 把要朗读的文本切成若干段，每段约占总时长的 1/parts。
+ * QQ 单条语音超过 60 秒会被截断，长回复必须拆成多条发，
+ * 否则就会出现"说一半突然结束、最后一句听不到"。
+ * 优先在句末断开，句子太少时按字数均分。
+ */
+export function splitVoiceText(text: string, parts: number): string[] {
+    const n = Math.max(1, Math.min(8, Math.floor(parts)));
+    if (n <= 1)
+        return [text];
+    const sentences = text.split(/(?<=[。！？!?…\n])/).filter((s) => s.trim());
+    if (sentences.length < n) {
+        const size = Math.max(1, Math.ceil(text.length / n));
+        const out: string[] = [];
+        for (let i = 0; i < text.length; i += size)
+            out.push(text.slice(i, i + size));
+        return out.filter(Boolean);
+    }
+    const target = Math.ceil(text.length / n);
+    const out: string[] = [];
+    let idx = 0;
+    let remaining = n;
+    let restLen = sentences.reduce((a, s) => a + s.length, 0);
+    // 每段都按"剩下的字数 / 剩下的段数"分，避免出现 27/16/78 这种头轻脚重
+    while (idx < sentences.length && remaining > 1) {
+        const goal = restLen / remaining;
+        let cur = '';
+        while (idx < sentences.length) {
+            const s = sentences[idx]!;
+            if (cur && cur.length + s.length > goal)
+                break;
+            cur += s;
+            idx++;
+            restLen -= s.length;
+        }
+        if (!cur)
+            break;
+        out.push(cur);
+        remaining--;
+    }
+    const tail = sentences.slice(idx).join('');
+    if (tail)
+        out.push(tail);
+    return out.length > 1 ? out : (target > 0 ? [text] : [text]);
+}
 export function audioType(bytes: Buffer): {
     mime: string;
     ext: string;
-} {
-    if (bytes.length >= 12 && bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE')
+} {    if (bytes.length >= 12 && bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE')
         return { mime: 'audio/wav', ext: 'wav' };
     if (bytes.subarray(0, 3).toString() === 'ID3' || bytes[0] === 255 && ((bytes[1] ?? 0) & 224) === 224)
         return { mime: 'audio/mpeg', ext: 'mp3' };
@@ -261,7 +317,37 @@ export class SpeechService {
             signal.throwIfAborted();
             if (bytes.length * 4 / 3 + 2048 > config.napcat.maxBufferedBytes)
                 throw Error('语音超过OneBot发送缓冲上限，保留文字');
-            await api.sendToScope(msg.scope, [{ type: 'record', data: { file: 'base64://' + bytes.toString('base64') } }], { throwOnError: true });
+            // QQ 单条语音超过 60 秒会被截断：长回复拆成多条，否则"说一半就停"
+            const maxSeconds = config.speech.tts.maxSeconds || 55;
+            const seconds = audioSeconds(bytes);
+            let pieces = [bytes];
+            if (seconds > maxSeconds) {
+                // 逐级二分：拆完仍超时就再拆，最多 3 层（最多 8 条）
+                const build = async (chunk: string, depth: number): Promise<Buffer[]> => {
+                    signal.throwIfAborted();
+                    const audio = await this.synthesize(chunk, persona, signal, config);
+                    if (audioSeconds(audio) <= maxSeconds || depth >= 3 || chunk.length < 24)
+                        return [audio];
+                    const sub = splitVoiceText(chunk, 2);
+                    if (sub.length < 2)
+                        return [audio];
+                    const out: Buffer[] = [];
+                    for (const s of sub)
+                        out.push(...(await build(s, depth + 1)));
+                    return out;
+                };
+                const first = splitVoiceText(text, Math.ceil(seconds / maxSeconds));
+                pieces = [];
+                for (const chunk of first.length > 1 ? first : [text])
+                    pieces.push(...(await build(chunk, 1)));
+                if (pieces.length > 1)
+                    this.log.info({ scope: msg.scope, seconds: Math.round(seconds), parts: pieces.length }, '🔊 语音过长，已拆成多条发送');
+            }
+            for (const piece of pieces) {
+                if (piece.length * 4 / 3 + 2048 > config.napcat.maxBufferedBytes)
+                    throw Error('语音超过OneBot发送缓冲上限，保留文字');
+                await api.sendToScope(msg.scope, [{ type: 'record', data: { file: 'base64://' + piece.toString('base64') } }], { throwOnError: true });
+            }
             // 成功路径以前什么都不打，导致事后分不清"没发语音"和"发了但没记录"。
             this.log.info({
                 scope: msg.scope,
@@ -269,7 +355,9 @@ export class SpeechService {
                 voice: persona.voice.voice || config.speech.tts.voice || 'default',
                 mode: config.speech.tts.mode,
                 format: config.speech.tts.format,
-                bytes: bytes.length,
+                bytes: pieces.reduce((n, b) => n + b.length, 0),
+                seconds: Math.round(audioSeconds(pieces[0]!)),
+                parts: pieces.length,
                 chars: text.length,
             }, '🔊 语音已发送');
             return true;

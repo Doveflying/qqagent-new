@@ -34,8 +34,10 @@ sudo bash 04-panel.sh '你的密码'
 ```powershell
 powershell -File deploy\pack.ps1
 scp qqagent-deploy.tar.gz root@39.106.128.9:/root/
-ssh ... root@39.106.128.9 "cd /opt/qqagent && tar xzf /root/qqagent-deploy.tar.gz && chown -R qqagent:qqagent /opt/qqagent && sudo -u qqagent npm ci --ignore-scripts && sudo -u qqagent npm run build && systemctl restart qqagent"
+powershell -File deploy\run-remote.ps1 deploy\update.sh
 ```
+
+`update.sh` 只解包（跳过 `data/`）、编译、重启，不动数据库；需要装新依赖时才重跑 `02-agent.sh`。
 
 日常体检：`powershell -File deploy\run-remote.ps1 deploy\status.sh`
 

@@ -470,7 +470,7 @@ export const SpeechEndpointSchema=z.object({
 });
 export const SpeechSchema=z.object({
   asr:SpeechEndpointSchema.extend({enabled:z.boolean().default(false),groupAll:z.boolean().default(false)}).prefault({}),
-  tts:SpeechEndpointSchema.extend({enabled:z.boolean().default(false),mode:z.enum(['always','on-audio']).default('on-audio'),voice:z.string().max(200).default('alloy'),format:z.enum(['mp3','wav','opus']).default('mp3'),instructions:z.string().max(1500).default(''),maxChars:z.number().int().min(50).max(4000).default(1500)}).prefault({}),
+  tts:SpeechEndpointSchema.extend({enabled:z.boolean().default(false),mode:z.enum(['always','on-audio']).default('on-audio'),voice:z.string().max(200).default('alloy'),format:z.enum(['mp3','wav','opus']).default('mp3'),instructions:z.string().max(1500).default(''),maxChars:z.number().int().min(50).max(4000).default(1500),maxSeconds:z.number().int().min(5).max(300).default(55)}).prefault({}),
   timeoutMs:z.number().int().min(1000).max(120000).default(30000),maxBytes:z.number().int().min(1024).max(25000000).default(20000000),
   allowedDirs:z.array(z.string()).default([]),
 });
