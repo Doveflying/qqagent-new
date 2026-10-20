@@ -19,7 +19,7 @@
     "providerKey": "siliconflow",
     "baseURL": "https://api.siliconflow.cn/v1",
     "model": "FunAudioLLM/CosyVoice2-0.5B",
-    "voice": "FunAudioLLM/CosyVoice2-0.5B:alex",
-    "note": "本地不可用时由代理内部回落到云端，仍保持日语"
+    "voice": "speech:shiori24:d9atenucnncc73fcn05g:uhtaensjfbhfuepbwrpk",
+    "note": "本地不可用时由代理内部回落到云端复刻音色，仍保持目标语言"
   }
 }

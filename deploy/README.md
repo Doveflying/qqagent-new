@@ -2,6 +2,22 @@
 
 目标：服务器上跑 QQ(NapCat) + Agent，电脑关机也能回消息。
 
+## 手机访问面板
+
+面板本身始终只监听 `127.0.0.1:3081`。要手机直接打开，用 nginx 在前面加一层 HTTPS + 密码：
+
+```bash
+sudo bash 04-panel.sh '你的密码'
+```
+
+- 监听 `8443/tcp`，自签证书（10 年），HTTP Basic Auth（用户名固定 `admin`）
+- 首次访问浏览器会警告证书不受信任，选「高级 → 继续前往」即可
+- 自检：`curl -sk https://127.0.0.1:8443/` 应返回 401，带 `-u admin:密码` 应返回 200
+- 改密码：重跑 `04-panel.sh '新密码'`，或 `htpasswd -b /etc/nginx/.htpasswd admin '新密码' && systemctl reload nginx`
+- **云厂商安全组必须放行 8443/tcp**，否则外部连不上（本机 `curl` 正常但手机打不开，就是这个原因）
+
+不想暴露端口时删掉 `/etc/nginx/conf.d/qqagent-panel.conf` 并 `systemctl reload nginx` 即可回到只走 SSH 隧道。
+
 ## 当前实例（已部署）
 
 | 项 | 值 |
