@@ -19,9 +19,13 @@
     "limits":  {
                    "perDay":  1,
                    "minGapHours":  18,
+                   "times":  [
+
+                             ],
+                   "jitterMinutes":  20,
                    "activeFrom":  "09:00",
                    "activeTo":  "23:00",
-                   "note":  "每天最多 perDay 条；两次间隔至少 minGapHours 小时；只在 activeFrom-activeTo 内随机挑一个时间点"
+                   "note":  "times 非空就按这些钟点发（前后浮动 jitterMinutes 分钟）；留空则在 activeFrom~activeTo 内随机挑。两次间隔至少 minGapHours 小时"
                },
     "llm":  {
                 "providerKey":  "deepseek",

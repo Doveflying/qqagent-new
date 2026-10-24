@@ -80,7 +80,7 @@ powershell -File deploy\run-remote.ps1 deploy\update.sh
 在本机（Windows）：
 
 ```powershell
-cd C:\桌面图标\qwe\QQagent
+cd C:\Projects\QQagent
 powershell -File deploy\pack.ps1
 scp qqagent-deploy.tar.gz root@SERVER_IP:/root/
 ```

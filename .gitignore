@@ -20,6 +20,7 @@ docs/*
 !docs/memory-review.png
 !docs/group-policy.png
 !docs/usage-budget.png
+!docs/self-post-schedule.png
 docs/online-*.json
 docs/online-*.md
 docs/*-result.json

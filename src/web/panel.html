@@ -660,6 +660,33 @@
       </div>
 
       <div class="card">
+        <h3>自发说说 <span class="muted" style="font-weight:400">她自己发一条，不是回复谁</span></h3>
+        <div class="toggle-row"><div class="txt"><div class="t">启用自发说说</div><div class="d">关掉就只评论/回复别人，不自己发</div></div>
+          <label class="switch"><input type="checkbox" id="sp_enabled"><span class="slider"></span></label></div>
+
+        <div class="grid c4" style="margin-top:12px">
+          <div><label>每天最多（条）</label><input id="sp_perDay" type="number" min="0" max="5"></div>
+          <div><label>两次间隔（小时）</label><input id="sp_minGap" type="number" min="1" max="72"></div>
+          <div><label>时间点（留空=窗口内随机）</label><input id="sp_times" placeholder="20:30 或 09:00, 21:00"></div>
+          <div><label>时间浮动（±分钟）</label><input id="sp_jitter" type="number" min="0" max="180"></div>
+        </div>
+        <div class="grid c4" style="margin-top:10px">
+          <div><label>活跃窗口开始</label><input id="sp_from" placeholder="09:00"></div>
+          <div><label>活跃窗口结束</label><input id="sp_to" placeholder="23:00"></div>
+          <div><label>字数下限</label><input id="sp_minChars" type="number" min="5" max="200"></div>
+          <div><label>字数上限</label><input id="sp_maxChars" type="number" min="10" max="500"></div>
+        </div>
+        <div style="margin-top:10px"><label>话题起点（一行一条，只是给她一个随机的起头，不强制写）</label><textarea id="sp_topics" style="min-height:100px"></textarea></div>
+
+        <div class="muted" style="margin-top:6px">填了时间点就按那个钟点发（会前后浮动几十分钟，避免每天同一秒）；留空则在活跃窗口里随机挑。改动下一轮（≤10 分钟）生效。</div>
+        <div class="muted" id="sp_plan" style="margin-top:10px">正在加载…</div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button type="button" onclick="saveSelfPost(false)">保存</button>
+          <button type="button" class="ghost" onclick="saveSelfPost(true)">保存并按新时间重排今天</button>
+        </div>
+      </div>
+
+      <div class="card">
         <h3>她的日常 <span class="muted" style="font-weight:400">每轮随机抽一条塞进提示词，评论才不会千篇一律</span></h3>
         <label>状态池（一行一条，可写几十条）</label>
         <textarea id="qz_life" style="min-height:130px" placeholder="刚下课，包还没放下&#10;在便利店买关东煮，纠结要不要再加一串"></textarea>
@@ -874,7 +901,7 @@ async function refreshActivePage() {
     emotion: () => loadEmoUsers(),
     logs: () => loadLogs(),
     tasks: () => loadTasks(),
-    qzone: () => loadQzone(),
+    qzone: () => Promise.all([loadQzone(), loadSelfPost()]),
     login: () => loadLogin()
   };
   const action = actions[activePage];
@@ -2134,6 +2161,64 @@ function qzFormatWatch(list) {
     .map((w) => `${w.uin}${w.name ? ' ' + w.name : ''}`)
     .join('\n');
 }
+
+// ---------------- 自发说说 ----------------
+async function loadSelfPost() {
+  try {
+    const d = await api('/api/self-post');
+    const cfg = d.config || {};
+    const lim = cfg.limits || {};
+    const st = cfg.style || {};
+    $('sp_enabled').checked = cfg.enabled !== false;
+    $('sp_perDay').value = lim.perDay ?? 1;
+    $('sp_minGap').value = lim.minGapHours ?? 18;
+    $('sp_times').value = (lim.times || []).join(', ');
+    $('sp_jitter').value = lim.jitterMinutes ?? 20;
+    $('sp_from').value = lim.activeFrom ?? '09:00';
+    $('sp_to').value = lim.activeTo ?? '23:00';
+    $('sp_minChars').value = st.minChars ?? 25;
+    $('sp_maxChars').value = st.maxChars ?? 90;
+    $('sp_topics').value = (st.topics || []).join('\n');
+
+    const state = d.state || {};
+    const targets = Array.isArray(state.targets) ? state.targets : [];
+    $('sp_plan').textContent = targets.length
+      ? '今天的时间点：' + targets.map((t) => new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })).join('、') +
+        '（已发 ' + (state.count ?? 0) + ' 条）'
+      : '今天还没排时间点，下一轮会按当前配置生成';
+  } catch (e) {
+    $('sp_plan').textContent = apiErrorBox(e).replace(/<[^>]+>/g, '');
+  }
+}
+
+async function saveSelfPost(resetTargets) {
+  const body = {
+    enabled: $('sp_enabled').checked,
+    limits: {
+      perDay: Number($('sp_perDay').value),
+      minGapHours: Number($('sp_minGap').value),
+      times: $('sp_times').value,
+      jitterMinutes: Number($('sp_jitter').value),
+      activeFrom: $('sp_from').value.trim(),
+      activeTo: $('sp_to').value.trim(),
+    },
+    style: {
+      minChars: Number($('sp_minChars').value),
+      maxChars: Number($('sp_maxChars').value),
+      topics: $('sp_topics').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    },
+    resetTargets: Boolean(resetTargets),
+  };
+  try {
+    const d = await post('/api/self-post', body);
+    if (!d.ok) return toast(d.error || '保存失败', 'err');
+    toast(resetTargets ? '已保存，今天的时间点已重排' : '已保存，下一轮生效', 'ok');
+    await loadSelfPost();
+  } catch (e) {
+    toast('保存失败：' + e.message, 'err');
+  }
+}
+window.saveSelfPost = saveSelfPost;
 
 async function loadQzone() {
   try {

@@ -388,6 +388,96 @@ export function createServer(deps: ServerDeps): { app: Hono; start: () => void; 
     }
   });
 
+  // ==================== 自发说说 ====================
+  const selfPostPath = path.join(PROJECT_ROOT, 'config', 'self-post.json');
+  const selfPostStatePath = path.join(PROJECT_ROOT, 'config', 'self-post.state.json');
+
+  /** 校验并归一化自发说说配置：时间点、频率、字数、话题 */
+  const normalizeSelfPost = (raw: Record<string, unknown>, base: Record<string, any>) => {
+    const limits = (raw['limits'] ?? {}) as Record<string, unknown>;
+    const style = (raw['style'] ?? {}) as Record<string, unknown>;
+    const baseLimits = (base['limits'] ?? {}) as Record<string, any>;
+    const baseStyle = (base['style'] ?? {}) as Record<string, any>;
+
+    const intIn = (v: unknown, min: number, max: number, def: number) => {
+      const n = Math.round(Number(v));
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+    };
+    const clock = (v: unknown, def: string) => {
+      const m = /^(\d{1,2}):(\d{2})$/.exec(String(v ?? '').trim());
+      if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return def;
+      return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+    };
+
+    // 时间点：允许 "20:30" 或 "20:30, 09:00"；留空 = 窗口内随机
+    const rawTimes = Array.isArray(raw['times']) ? raw['times'] : String(raw['times'] ?? '').split(/[,，\s]+/);
+    const times: string[] = [];
+    for (const t of rawTimes as unknown[]) {
+      const s = String(t ?? '').trim();
+      if (!s) continue;
+      const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+      if (!m) throw new Error(`时间点格式应为 HH:mm：${s}`);
+      if (Number(m[1]) > 23 || Number(m[2]) > 59) throw new Error(`时间点超出范围：${s}`);
+      const norm = `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+      if (!times.includes(norm)) times.push(norm);
+      if (times.length > 5) throw new Error('最多 5 个时间点');
+    }
+
+    const topics = (Array.isArray(raw['topics']) ? (raw['topics'] as unknown[]) : [])
+      .map((t) => String(t ?? '').trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    for (const t of topics) if (t.length > 40) throw new Error(`话题太长（≤40 字）：${t.slice(0, 12)}…`);
+
+    const minChars = intIn(style['minChars'], 5, 200, Number(baseStyle.minChars ?? 25));
+    const maxChars = intIn(style['maxChars'], 10, 500, Number(baseStyle.maxChars ?? 90));
+    if (minChars >= maxChars) throw new Error('字数下限必须小于上限');
+
+    return {
+      ...base,
+      enabled: raw['enabled'] === undefined ? base['enabled'] !== false : raw['enabled'] !== false,
+      limits: {
+        ...baseLimits,
+        perDay: intIn(limits['perDay'], 0, 5, Number(baseLimits.perDay ?? 1)),
+        minGapHours: intIn(limits['minGapHours'], 1, 72, Number(baseLimits.minGapHours ?? 18)),
+        times,
+        jitterMinutes: intIn(limits['jitterMinutes'], 0, 180, Number(baseLimits.jitterMinutes ?? 20)),
+        activeFrom: clock(limits['activeFrom'], String(baseLimits.activeFrom ?? '09:00')),
+        activeTo: clock(limits['activeTo'], String(baseLimits.activeTo ?? '23:00')),
+      },
+      style: { ...baseStyle, minChars, maxChars, topics },
+    };
+  };
+
+  app.get('/api/self-post', c => c.json({
+    ok: true,
+    path: selfPostPath,
+    exists: fs.existsSync(selfPostPath),
+    config: readJsonFile(selfPostPath) ?? {},
+    state: readJsonFile(selfPostStatePath) ?? {},
+  }));
+
+  app.post('/api/self-post', async c => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const base = (readJsonFile(selfPostPath) ?? {}) as Record<string, any>;
+    try {
+      const next = normalizeSelfPost(body, base);
+      atomicWrite(selfPostPath, `${JSON.stringify(next, null, 2)}\n`);
+      // 改了时间点想今天立刻生效：清掉今天已排的时间，下一轮重新生成
+      if (body['resetTargets'] === true) {
+        const state = (readJsonFile(selfPostStatePath) ?? {}) as Record<string, any>;
+        delete state.targets;
+        delete state.targetAt;
+        atomicWrite(selfPostStatePath, `${JSON.stringify(state, null, 2)}\n`);
+      }
+      log.info({ perDay: next.limits.perDay, times: next.limits.times, enabled: next.enabled }, '已更新自发说说配置');
+      return c.json({ ok: true, config: next, message: '已保存，下一轮（≤10 分钟）生效' });
+    } catch (e) {
+      log.warn({ method: c.req.method, route: c.req.path, ...errorDetails(e) }, '保存自发说说配置失败');
+      return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
   // 她的「日常」：qzone-reply.mjs 和 self-post.mjs 共用的 life/emoticons/images
   const qzoneLifePath = path.join(PROJECT_ROOT, 'config', 'qzone-life.json');
 

@@ -412,7 +412,7 @@ namespace QQAgent
                 if (parent == null) break;
                 dir = parent.FullName;
             }
-            return @"C:\桌面图标\qwe\QQagent";
+            return @"C:\Projects\QQagent";
         }
 
         private void RunCmd(string fileName, string extraArgs = "")

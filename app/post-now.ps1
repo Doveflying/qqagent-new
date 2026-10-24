@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Continue'
 
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not (Test-Path (Join-Path $repo 'start-all.cmd'))) {
-    $repo = 'C:\桌面图标\qwe\QQagent'
+    $repo = 'C:\Projects\QQagent'
 }
 
 $script = Join-Path $repo 'scripts\self-post.mjs'

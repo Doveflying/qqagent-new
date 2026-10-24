@@ -2,7 +2,8 @@
 //
 // 设计目标是"少而精"：
 //   - 每天最多 perDay 条（默认 1）
-//   - 每次在 activeFrom~activeTo 之间随机挑一个时间点，不是固定钟点，避免机械感
+//   - 时间可以是「指定钟点 + 随机浮动」（limits.times + jitterMinutes），
+//     也可以留空，在 activeFrom~activeTo 之间随机挑，避免机械感
 //   - 两次之间至少间隔 minGapHours 小时
 //   - 不依赖 QQagent 进程，直接连 NapCat 的 OneBot WS 发 send_qzone_msg
 //
@@ -11,7 +12,7 @@
 //   node scripts/self-post.mjs --force    忽略时间限制，立刻发一条（测试用）
 //   node scripts/self-post.mjs --dry      只生成内容并打印，不发送
 //
-// 状态文件：config/self-post.state.json（记录今天的目标时间与上次发布时间）
+// 状态文件：config/self-post.state.json（记录今天的目标时间、上次发布时间与最近发过的内容）
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -46,6 +47,39 @@ function timeOfDay(d = new Date()) {
   if (h < 22) return '晚上';
   return '深夜';
 }
+
+function weekdayOf(d = new Date()) {
+  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
+}
+
+function seasonOf(d = new Date()) {
+  const m = d.getMonth() + 1;
+  if (m <= 2 || m === 12) return '冬天';
+  if (m <= 5) return '春天';
+  if (m <= 8) return '夏天';
+  return '秋天';
+}
+
+/**
+ * 每次随机抽一条写法指令。
+ * 这是"不像同一个模子刻出来的"的关键：状态在变、写法在变、还明确禁止重复自己。
+ */
+const STYLE_HINTS = [
+  '只写半句也行，剩下的让人自己补',
+  '写一件今天发生的小事，别评价它',
+  '可以只是抱怨一句，不用给结论',
+  '写一个突然冒出来的念头，不用有前因后果',
+  '语气平淡一点，别抒情',
+  '可以自嘲一句',
+  '写个具体的东西：一个味道、一个声音、一个温度',
+  '短到只有六七个字也可以',
+  '可以对着某个不存在的人说一句话',
+  '写一句你没说出口的话',
+];
+
+/** 模型最容易套的模板开头，明确禁掉 */
+const BANNED_OPENERS = ['今天也是', '记录一下', '最近', '好久没', '突然想到', '有时候', '其实我', '生活总是'];
+const BANNED_WORDS = ['仿佛', '似乎', '不禁', '或许', '大抵', '莫名', '莫名地', '不禁感叹'];
 
 const args = new Set(process.argv.slice(2));
 const FORCE = args.has('--force');
@@ -108,37 +142,108 @@ function pickTargetToday(now, limits) {
   const from = minutesOf(limits.activeFrom ?? '09:00');
   const to = minutesOf(limits.activeTo ?? '23:00');
   const span = Math.max(1, to - from);
-  const pick = from + Math.floor(Math.random() * span);
+  const pickMinute = from + Math.floor(Math.random() * span);
   const d = new Date(now);
-  d.setHours(Math.floor(pick / 60), pick % 60, Math.floor(Math.random() * 60), 0);
+  d.setHours(Math.floor(pickMinute / 60), pickMinute % 60, Math.floor(Math.random() * 60), 0);
   return d.getTime();
 }
 
-async function generatePost(cfg, life) {
+/**
+ * 今天的发布时间点（按 perDay 生成，已排序）。
+ *
+ * 两种模式：
+ *  - `limits.times` 非空：用你指定的钟点，每个再随机浮动 ±jitterMinutes，
+ *    这样不会每天同一分同一秒发出去（机械感是"像人"最大的破绽）
+ *  - 留空：在 activeFrom~activeTo 之间随机挑，行为与旧版一致
+ */
+export function pickTargets(now, limits = {}, rand = Math.random) {
+  const perDay = Math.max(1, Math.min(5, Number(limits.perDay ?? 1) || 1));
+  const jitter = Math.max(0, Number(limits.jitterMinutes ?? 20) || 0);
+  // 只认合法的 HH:mm（25:99 这种要挡掉），再按时间先后排序，
+  // 这样 perDay=1 时取到的一定是配置里最早的那个钟点，行为可预期。
+  const times = (Array.isArray(limits.times) ? limits.times : [])
+    .map((t) => /^(\d{1,2}):(\d{2})$/.exec(String(t).trim()))
+    .filter((m) => m && Number(m[1]) <= 23 && Number(m[2]) <= 59)
+    .map((m) => Number(m[1]) * 60 + Number(m[2]))
+    .sort((a, b) => a - b);
+
+  const base = new Date(now);
+  const out = [];
+  if (times.length > 0) {
+    for (let i = 0; i < perDay; i++) {
+      const baseMinute = times[i % times.length];
+      const jittered = baseMinute + (jitter > 0 ? Math.round((rand() * 2 - 1) * jitter) : 0);
+      const d = new Date(base);
+      d.setHours(0, 0, 0, 0);
+      out.push(d.getTime() + Math.max(0, Math.min(24 * 60 - 1, jittered)) * 60000 + Math.floor(rand() * 60000));
+    }
+  } else {
+    for (let i = 0; i < perDay; i++) out.push(pickTargetToday(now, limits));
+  }
+  return out.sort((a, b) => a - b);
+}
+
+function fmtClock(ts) {
+  return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * 拼提示词（纯函数，方便测试）。
+ * recent 是最近发过的几条——重复自己是"不像活人"最明显的信号之一。
+ */
+export function buildPostPrompt(cfg, life, recent = [], now = new Date()) {
+  const topics = cfg.style?.topics ?? [];
+  const seed = topics.length ? pick(topics) : '今天的心情';
+  const min = cfg.style?.minChars ?? 25;
+  const max = cfg.style?.maxChars ?? 90;
+  const stamp = `${now.getMonth() + 1}月${now.getDate()}日 ${weekdayOf(now)} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+  const lines = [
+    personaPrompt(cfg.persona),
+    '',
+    '你在自己的 QQ 空间发一条说说——不是回复谁，是你自己突然想发。',
+    '',
+    `【这次怎么写】${pick(STYLE_HINTS)}`,
+    `【长度】${min}~${max} 字，按口语的字算，别写成作文`,
+    `【时间】现在是 ${stamp}，${seasonOf(now)}的${(life && life.time) || timeOfDay(now)}`,
+  ];
+  if (life && life.lifeLine) lines.push(`【你现在在干嘛】${life.lifeLine}（只当背景，别写成流水账）`);
+  if (recent.length > 0) {
+    lines.push(`【最近发过】${recent.slice(-4).map((t) => `「${t}」`).join('')}——别重复这些的句式和开头`);
+  }
+  lines.push(
+    '',
+    '要求：',
+    '- 像随手打的：可以只有半句、可以突然跳题、可以没头没尾',
+    '- 只写一件事，不要起承转合，不要总结升华，不要给建议',
+    '- 不解释你为什么发这条，不写"记录一下"这种话',
+    `- 不要用这些开头：${BANNED_OPENERS.join('、')}`,
+    `- 不要用这些书面词：${BANNED_WORDS.join('、')}`,
+    '- 不要标题、不要话题标签、不要用引号把正文包起来',
+    life && life.useEmoji
+      ? `- 可以带一个表情符号（最多一个，从这些里选：${life.emoji || '🙃'}）`
+      : '- 不用任何 emoji',
+  );
+
+  return {
+    system: lines.join('\n'),
+    user: `现在是 ${stamp}。可以想想：${seed}。直接写出说说正文。`,
+  };
+}
+
+/** 清掉模型爱加的外壳：首尾引号、多余空行、结尾堆叠的省略号 */
+export function cleanPostText(raw) {
+  let text = String(raw ?? '').trim();
+  text = text.replace(/^[\s"'`「『（(\[]+/, '').replace(/[\s"'`」』）)\]]+$/, '').trim();
+  text = text.replace(/\n{3,}/g, '\n\n').replace(/[…\.]{4,}$/, '……');
+  return text.trim();
+}
+
+async function generatePost(cfg, life, recent = []) {
   const creds = providerCreds(cfg.llm?.providerKey);
   if (!creds?.apiKey) throw new Error(`供应商 ${cfg.llm?.providerKey} 没有可用的 API Key`);
 
-  const topics = cfg.style?.topics ?? [];
-  const seed = topics.length ? topics[Math.floor(Math.random() * topics.length)] : '今天的心情';
-  const min = cfg.style?.minChars ?? 25;
-  const max = cfg.style?.maxChars ?? 90;
-
-  const now = new Date();
-  const stamp = `${now.getMonth() + 1}月${now.getDate()}日 ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
-  const system = [
-    personaPrompt(cfg.persona),
-    '',
-    '现在你要在 QQ 空间发一条只属于自己的说说——不是回复任何人，是你自己的想法。',
-    `要求：${min}~${max} 字，口语，像随手打出来的；不写标题、不写话题标签；`,
-    '不解释你在做什么，不写"今天也是元気的一天"这种模板句；可以有情绪、有判断、有具体的小细节。',
-    '只说一件事，别铺陈。',
-    ...(life && life.lifeLine ? [`你现在的生活状态：${life.lifeLine}（可以当作写这条说说的由头，但别写成流水账）`] : []),
-    `现在是${life ? life.time : timeOfDay()}。`,
-    life && life.useEmoji
-      ? `可以带一个表情符号（最多一个，从这些里选：${life.emoji || '🙃'}）。`
-      : '不用 emoji 表情符号。',
-  ].join('\n');
+  const { system, user } = buildPostPrompt(cfg, life, recent);
 
   const res = await fetch(`${creds.baseURL}/chat/completions`, {
     method: 'POST',
@@ -147,7 +252,7 @@ async function generatePost(cfg, life) {
       model: cfg.llm?.model || 'deepseek-chat',
       messages: [
         { role: 'system', content: system },
-        { role: 'user', content: `现在是 ${stamp}。可以想想：${seed}。直接写出说说正文。` },
+        { role: 'user', content: user },
       ],
       temperature: 0.95 + Math.random() * 0.15,
       // deepseek-flash 是带推理的模型：思考过程会占用输出预算，
@@ -158,9 +263,7 @@ async function generatePost(cfg, life) {
   });
   if (!res.ok) throw new Error(`模型返回 ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const doc = await res.json();
-  let text = String(doc?.choices?.[0]?.message?.content ?? '').trim();
-  // 模型偶尔会带引号或残留的半截括号，统一清掉首尾的包裹字符
-  text = text.replace(/^[\s"'`「『（(\[]+/, '').replace(/[\s"'`」』）)\]]+$/, '').trim();
+  const text = cleanPostText(doc?.choices?.[0]?.message?.content ?? '');
   if (!text) throw new Error('模型返回空内容');
   return text;
 }
@@ -222,18 +325,20 @@ async function main() {
   const today = dayKey(new Date(now));
   const state = readJson(STATE_PATH, {}) ?? {};
 
-  // 每天重置：重新挑一个随机时间点
+  // 每天重置：重新挑今天的时间点（指定钟点 + 随机浮动，或窗口内随机）
   if (state.dayKey !== today) {
     state.dayKey = today;
     state.count = 0;
-    state.targetAt = pickTargetToday(now, cfg.limits ?? {});
+    state.targets = pickTargets(now, cfg.limits ?? {});
+    delete state.targetAt; // 旧版字段，迁移后清掉
     writeJson(STATE_PATH, state);
-    log(`新的一天，今日目标时间 ${new Date(state.targetAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`);
+    log(`新的一天，今日时间点：${state.targets.map(fmtClock).join('、')}`);
   }
 
   const limits = cfg.limits ?? {};
   const perDay = Number(limits.perDay ?? 1);
   const minGapMs = Number(limits.minGapHours ?? 18) * 3600 * 1000;
+  const targets = Array.isArray(state.targets) && state.targets.length > 0 ? state.targets : [];
 
   if (!FORCE) {
     if (Number(state.count ?? 0) >= perDay) { log(`今天已发 ${state.count} 条，达到上限 ${perDay}`); return; }
@@ -250,8 +355,10 @@ async function main() {
       log(`距上次发布不足 ${limits.minGapHours} 小时，还剩约 ${left} 小时`);
       return;
     }
-    if (now < Number(state.targetAt ?? 0)) {
-      log(`还没到今天的随机时间点（${new Date(state.targetAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}）`);
+    // 今天第 N 条对应第 N 个时间点；时间点用完就按最后一个（配合 count 上限）
+    const nextAt = Number(targets[Number(state.count ?? 0)] ?? targets[targets.length - 1] ?? 0);
+    if (nextAt > 0 && now < nextAt) {
+      log(`还没到今天的第 ${Number(state.count ?? 0) + 1} 个时间点（${fmtClock(nextAt)}）`);
       return;
     }
   }
@@ -266,7 +373,9 @@ async function main() {
     useEmoji,
     emoji: useEmoji ? pick(emo.list || ['🙃']) : '',
   };
-  const text = await generatePost(cfg, life);
+  // 最近发过的内容：写进提示词，明确禁止重复句式和开头
+  const recent = Array.isArray(state.recentPosts) ? state.recentPosts.slice(-6) : [];
+  const text = await generatePost(cfg, life, recent);
   const images = pickImages(shared);
   log(`内容（${text.length} 字）：${text}`);
   if (images.length) log(`附带图片：${images[0]}`);
@@ -342,8 +451,11 @@ async function main() {
   state.count = Number(state.count ?? 0) + 1;
   state.lastAt = now;
   state.failCount = 0;
+  state.recentPosts = [...(Array.isArray(state.recentPosts) ? state.recentPosts : []), text].slice(-6);
   writeJson(STATE_PATH, state);
   log(`完成，今天第 ${state.count} 条`);
 }
 
-main().catch((e) => { console.error(`[self-post] 失败：${e?.message ?? e}`); process.exit(1); });
+// 只有直接运行时才跑 main()：被测试 import 时不应该真去连 OneBot。
+const isEntry = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isEntry) main().catch((e) => { console.error(`[self-post] 失败：${e?.message ?? e}`); process.exit(1); });
