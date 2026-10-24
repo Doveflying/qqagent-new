@@ -87,6 +87,13 @@ export const SETTING_DEFS: SettingDef[] = [
     group: '记忆',
   },
   {
+    path: 'memory.factReview',
+    label: '新记忆需要确认',
+    desc: '抽到的事实先进「记忆 → 待确认」，人工确认后才参与检索；关闭时直接生效',
+    type: 'boolean',
+    group: '记忆',
+  },
+  {
     path: 'memory.summary.enabled',
     label: '长对话自动摘要',
     desc: '消息过多时把旧对话压成摘要，避免撑爆上下文',
@@ -193,6 +200,13 @@ export const SETTING_DEFS: SettingDef[] = [
     label: '仅在被人叫到时才可能接话',
     desc: '打开后没人 @机器人 就完全不主动发言',
     type: 'boolean',
+    group: '主动发言',
+  },
+  {
+    path: 'proactive.targets',
+    label: '只在这些会话主动（群白名单）',
+    desc: '填会话 id（如 group_123456，逗号分隔）；留空 = 所有群都算。这是「对谁主动」的总闸门',
+    type: 'string[]',
     group: '主动发言',
   },
   {

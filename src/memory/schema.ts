@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -282,6 +282,23 @@ CREATE TABLE IF NOT EXISTS reply_deliveries (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- ============================================================
+-- 召回记录：每次回复用了哪些记忆、为什么用它们
+-- payload 是 JSON：{ items: [...], summaries: [...], stats: {...} }
+-- 只用于解释与排查，不参与检索。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS memory_recalls (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope           TEXT    NOT NULL,
+  conversation_id TEXT    NOT NULL DEFAULT '',
+  user_id         INTEGER NOT NULL DEFAULT 0,
+  turn_id         TEXT    NOT NULL DEFAULT '',
+  query           TEXT    NOT NULL DEFAULT '',
+  payload         TEXT    NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recalls_scope ON memory_recalls(scope, created_at DESC);
 `;
 
 /** 生成一个对话 id（无需依赖 crypto 的 uuid） */
@@ -425,6 +442,9 @@ export function initDatabase(dbPath: string): DatabaseSync {
       addColumnIfMissing(db,'memory_facts','active','INTEGER NOT NULL DEFAULT 1');
       addColumnIfMissing(db,'memory_facts','replaces_id','INTEGER');
       addColumnIfMissing(db,'memory_facts','private','INTEGER NOT NULL DEFAULT 0');
+      // confirmed = 正常参与检索；pending = 待人工确认；rejected = 已驳回，永不召回
+      addColumnIfMissing(db,'memory_facts','review_state',"TEXT NOT NULL DEFAULT 'confirmed'");
+      db.exec('CREATE INDEX IF NOT EXISTS idx_facts_review ON memory_facts(user_id, review_state)');
       addColumnIfMissing(db,'fact_embeddings','source_content',"TEXT NOT NULL DEFAULT ''");
       addColumnIfMissing(db,'fact_embeddings','content_hash',"TEXT NOT NULL DEFAULT ''");
       db.exec('CREATE TABLE IF NOT EXISTS fact_cursors (user_id INTEGER NOT NULL, conversation_id TEXT NOT NULL, last_id INTEGER NOT NULL, PRIMARY KEY(user_id,conversation_id)); CREATE TABLE IF NOT EXISTS memory_forgetting (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, scope TEXT NOT NULL, content TEXT NOT NULL, source_msg_id INTEGER, cutoff INTEGER NOT NULL, created_at INTEGER NOT NULL)');

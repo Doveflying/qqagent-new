@@ -24,6 +24,8 @@ node "%~dp0obsidian-sync.mjs" --export >> "%~dp0..\logs\obsidian.log" 2>&1
 node "%~dp0self-post.mjs" >> "%~dp0..\logs\self-post.log" 2>&1
 REM Occasional proactive DM to the owner (once a day, random time).
 node "%~dp0proactive-dm.mjs" >> "%~dp0..\logs\proactive.log" 2>&1
+REM Reply to new QZone posts from the watch list (sample now and then).
+node "%~dp0qzone-reply.mjs" >> "%~dp0..\logs\qzone.log" 2>&1
 node "%~dp0watchdog.mjs" >> "%~dp0..\logs\watchdog.log" 2>&1
 timeout /t 600 /nobreak >nul
 goto loop

@@ -91,6 +91,8 @@ export class FactExtractor {
     scope: string,
     userId: number,
     signal?: AbortSignal,
+    /** pending = 先进待确认区（memory.factReview 打开时），人工确认后才参与检索 */
+    reviewState: 'confirmed' | 'pending' = 'confirmed',
   ): Promise<number> {
     if (messages.length === 0) return 0;
 
@@ -171,6 +173,7 @@ export class FactExtractor {
         confidence: f.confidence,
         shareable,
         sourceMsgId: f.sourceId,
+        reviewState,
         replacesId: existing.some(old => old.id === f.replacesId && old.fact_type === f.factType && old.scope === scope) ? f.replacesId : undefined,
       });
       added++;

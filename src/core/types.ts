@@ -147,6 +147,12 @@ export const ProactiveSchema = z.object({
   imageLookback: z.number().int().min(0).max(10).default(3),
   quietHours: z.array(z.string()).default(['23:00-08:00']),
   onlyWhenAddressed: z.boolean().default(false),
+  /**
+   * 主动发言的生效范围（会话白名单），形如 group_123456。
+   * 空 = 所有会话都可以主动（仍受访问控制/群白名单约束）。
+   * 这就是「对谁主动」这一层：只想在几个熟人群里活跃时把它们填进来。
+   */
+  targets: z.array(z.string()).default([]),
 });
 
 export const PersonaConfigSchema = z.object({
@@ -276,6 +282,11 @@ export const MemorySchema = z.object({
   recentTurns: z.number().int().positive().default(12),
   factExtraction: z.boolean().default(true),
   factExtractionModel: z.string().default(''),
+  /**
+   * 新抽取的事实先进「待确认」，人工确认后才参与检索。
+   * 默认关闭：开启后没人确认的记忆不会生效，属于需要主动选择的工作流。
+   */
+  factReview: z.boolean().default(false),
   retrieval: z
     .object({
       fts: z.boolean().default(true),

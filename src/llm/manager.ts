@@ -11,7 +11,7 @@ import { errorDetails } from '../core/logger.js';
 import fs from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Logger } from '../core/logger.js';
 import type {
   AppConfig,
@@ -28,6 +28,7 @@ import { inferModelMeta, findOverride } from './protocol.js';
 import { fitModelBudget } from './budget.js';
 import { outputTokenBudget } from './token-budgets.js';
 import { LlmClient, LlmError, type ChatOptions } from './client.js';
+import { classifyLlmError, type LlmErrorKind } from './errors.js';
 import { embedTexts, type EmbedResult } from './embedding.js';
 
 interface CacheEntry {
@@ -81,13 +82,30 @@ async function waitWithin<T>(promise: Promise<T>, ms: number, signal?: AbortSign
 export class ProviderManager {
   private usageDb?: import('node:sqlite').DatabaseSync;
   attachUsageStore(db: import('node:sqlite').DatabaseSync): void {
-    this.usageDb=db;db.exec('CREATE TABLE IF NOT EXISTS llm_calls (id INTEGER PRIMARY KEY,purpose TEXT NOT NULL,provider TEXT NOT NULL,model TEXT NOT NULL,success INTEGER NOT NULL,prompt_tokens INTEGER NOT NULL,completion_tokens INTEGER NOT NULL,latency_ms INTEGER NOT NULL,retry INTEGER NOT NULL,created_at INTEGER NOT NULL)');
+    this.usageDb=db;db.exec('CREATE TABLE IF NOT EXISTS llm_calls (id INTEGER PRIMARY KEY,purpose TEXT NOT NULL,provider TEXT NOT NULL,model TEXT NOT NULL,success INTEGER NOT NULL,prompt_tokens INTEGER NOT NULL,completion_tokens INTEGER NOT NULL,latency_ms INTEGER NOT NULL,retry INTEGER NOT NULL,created_at INTEGER NOT NULL,error TEXT NOT NULL DEFAULT \'\',error_kind TEXT NOT NULL DEFAULT \'\',chain_id TEXT NOT NULL DEFAULT \'\')');
+    // 失败原因、错误分类与调用链：面板的健康中心和调用诊断要靠这三列回答
+    // 「为什么失败」「是不是切了备用模型」。老库没有，补一次（幂等）。
+    const cols=db.prepare('PRAGMA table_info(llm_calls)').all() as unknown as Array<{name:string}>;
+    if(!cols.some(c=>c.name==='error')) db.exec("ALTER TABLE llm_calls ADD COLUMN error TEXT NOT NULL DEFAULT ''");
+    if(!cols.some(c=>c.name==='error_kind')) db.exec("ALTER TABLE llm_calls ADD COLUMN error_kind TEXT NOT NULL DEFAULT ''");
+    if(!cols.some(c=>c.name==='chain_id')) db.exec("ALTER TABLE llm_calls ADD COLUMN chain_id TEXT NOT NULL DEFAULT ''");
+    db.exec('CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(created_at)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_llm_calls_chain ON llm_calls(chain_id)');
     for(const row of db.prepare('SELECT provider,model,SUM(prompt_tokens) AS promptTokens,SUM(completion_tokens) AS completionTokens,COUNT(*) AS calls FROM llm_calls WHERE success=1 GROUP BY provider,model').all() as unknown as UsageRecord[]) this.usage.set(row.provider+'/'+row.model,row);
   }
-  private metric(provider:string,model:string,purpose:string,success:boolean,latency:number,retry=0,prompt=0,completion=0):void {
-    this.usageDb?.prepare('INSERT INTO llm_calls(purpose,provider,model,success,prompt_tokens,completion_tokens,latency_ms,retry,created_at) VALUES(?,?,?,?,?,?,?,?,?)').run(purpose,provider,model,Number(success),prompt,completion,Math.round(latency),retry,Date.now());
+  /** 记一条调用。成功时 error/errorKind 留空，失败时带上分类与原文。 */
+  private metric(row: {
+    provider: string; model: string; purpose: string; success: boolean; latencyMs: number;
+    retry?: number; prompt?: number; completion?: number;
+    error?: string; errorKind?: LlmErrorKind; chainId?: string;
+  }): void {
+    this.usageDb?.prepare('INSERT INTO llm_calls(purpose,provider,model,success,prompt_tokens,completion_tokens,latency_ms,retry,created_at,error,error_kind,chain_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(row.purpose,row.provider,row.model,Number(row.success),row.prompt??0,row.completion??0,
+        Math.round(row.latencyMs),row.retry??0,Date.now(),
+        row.success?'':String(row.error??'').slice(0,500),
+        row.success?'':(row.errorKind??'unknown'),row.chainId??'');
   }
-  recordSpeechCall(provider:string,model:string,purpose:'asr'|'tts',success:boolean,latency:number):void{this.metric(provider,model,purpose,success,latency);}
+  recordSpeechCall(provider:string,model:string,purpose:'asr'|'tts',success:boolean,latency:number):void{this.metric({provider,model,purpose,success,latencyMs:latency});}
   private cache: CacheFile = { version: 1, entries: {} };
   private cachePath: string;
   private readonly client: LlmClient;
@@ -235,7 +253,8 @@ export class ProviderManager {
       signal: opts?.signal,
       timeoutMs: opts?.timeoutMs,
     });
-    this.metric(providerKey,modelId,'embedding',result.ok,result.latencyMs);
+    this.metric({provider:providerKey,model:modelId,purpose:'embedding',success:result.ok,latencyMs:result.latencyMs,
+      error:result.error,errorKind:result.ok?undefined:classifyLlmError(result.error)});
     return result;
   }
 
@@ -454,8 +473,9 @@ export class ProviderManager {
     return options;
   }
 
-  private recordUsage(provider: string, model: string, result: LlmResult, purpose = 'chat', retry = 0): void {
-    this.metric(provider,model,purpose,true,result.latencyMs,retry,result.usage.promptTokens,result.usage.completionTokens);
+  private recordUsage(provider: string, model: string, result: LlmResult, purpose = 'chat', retry = 0, chainId = ''): void {
+    this.metric({provider,model,purpose,success:true,latencyMs:result.latencyMs,retry,
+      prompt:result.usage.promptTokens,completion:result.usage.completionTokens,chainId});
     const key = `${provider}/${model}`;
     const cur = this.usage.get(key) ?? { provider, model, promptTokens: 0, completionTokens: 0, calls: 0 };
     cur.promptTokens += result.usage.promptTokens;
@@ -494,6 +514,9 @@ export class ProviderManager {
     const timeoutMs = overrides.timeoutMs ?? this.llmCfg?.request.timeoutMs ?? 120000;
     const deadline = Date.now() + timeoutMs;
     const signal = overrides.signal;
+    // 一次逻辑调用 = 一条调用链。重试和回退都记在同一个 chainId 下，
+    // 面板才能还原「主模型 429 → 重试 → 切到备用成功」这个过程。
+    const chainId = randomUUID();
     let lastErr: Error = new LlmError('所有 provider 均调用失败');
     const chain = [{ provider: providerKey, model: modelId }, ...fallbackKeys.map(k =>
       typeof k === 'string' ? { provider: k, model: undefined } : { provider: k.provider, model: k.model || undefined })];
@@ -537,12 +560,14 @@ export class ProviderManager {
           if (signal?.aborted) throw new LlmError('请求已取消', undefined, false, true);
           result.provider = resolved.providerName;
           result.model = resolved.modelId;
-          this.recordUsage(key, resolved.modelId, result, overrides.purpose ?? 'chat', attempt);
+          this.recordUsage(key, resolved.modelId, result, overrides.purpose ?? 'chat', attempt, chainId);
           // 只有完整成功的一次尝试发布正文，重试/回退不泄露残片。
           if (onDelta) for (const chunk of chunks) onDelta(chunk);
           return result;
         } catch (e) {
-          this.metric(key,candidate.model??'',overrides.purpose??'chat',false,Date.now()-attemptStarted,attempt);
+          this.metric({provider:key,model:candidate.model??'',purpose:overrides.purpose??'chat',success:false,
+            latencyMs:Date.now()-attemptStarted,retry:attempt,
+            error:e instanceof Error?e.message:String(e),errorKind:classifyLlmError(e),chainId});
           lastErr = e as Error;
           this.log[signal?.aborted || e instanceof LlmError && e.cancelled ? 'debug' : 'warn']({
             provider:key,model:candidate.model,purpose:overrides.purpose??'chat',attempt:attempt+1,

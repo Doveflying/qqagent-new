@@ -41,13 +41,22 @@ import {
 import { EMOTION_LABELS_CN } from '../emotion/analyzer.js';
 import { FACT_TYPE_CN } from '../memory/extractor.js';
 import { getPanelHtml } from '../web/panel.js';
+import { loadGroupOverrides, saveGroupOverrides, normalizeGroupOverride } from '../config/groups.js';
+import { buildHealthSnapshot } from './health.js';
+import { buildCallDiagnostics } from './llm-diagnostics.js';
+import { buildUsageReport } from './usage-report.js';
 import { COMMAND_DEFINITIONS, commandPermission } from '../pipeline/command-permissions.js';
 import { StickerLibrary } from '../persona/stickers.js';
 import { safeRelPath } from '../persona/stickerAnalyze.js';
 import { sniffMime } from '../llm/vision.js';
 import type { ImportResult } from '../persona/stickerImport.js';
 import type { AnalyzeResult } from '../persona/stickerAnalyze.js';
-import {parseReminder,type ScheduledTasks} from '../tasks/scheduled.js';
+import { parseReminder, type ScheduledTasks } from '../tasks/scheduled.js';
+import { createLoginService, QR_FRESH_MS } from './login.js';
+import { setConfigValues } from '../config/writer.js';
+import { atomicWrite } from '../config/atomic.js';
+import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 
 export interface ServerDeps {
   tasks?:ScheduledTasks;
@@ -140,7 +149,8 @@ export function createServer(deps: ServerDeps): { app: Hono; start: () => void; 
     const token =
       c.req.header('authorization')?.replace(/^Bearer\s+/i, '') ??
       c.req.header('x-auth-token') ??
-      (c.req.path === '/api/stickers/file' ? c.req.query('token') : undefined);
+      (c.req.path === '/api/stickers/file' ? c.req.query('token') : undefined) ??
+      ((c.req.path === '/api/login/qr' || c.req.path === '/api/login/status') ? c.req.query('token') : undefined);
     if (token !== cfg.server.authToken) {
       return c.json({ ok: false, error: '未授权：token 不正确' }, 401);
     }
@@ -158,6 +168,373 @@ export function createServer(deps: ServerDeps): { app: Hono; start: () => void; 
     return next();
   });
   app.get('/api/health', c => c.json({ok:true,runtime:runtime(),diagnostics:deps.diagnostics?.(),embedding:store.embeddingStats()}));
+
+  // 健康中心：评分、模型可用性、最近失败、任务状态、24h 调用趋势。
+  // 单独一个接口而不是塞进 /api/overview：概览 15 秒轮询一次，这些聚合查询没必要跟着跑。
+  app.get('/api/health/center', c => c.json(buildHealthSnapshot({
+    runtime: runtime(),
+    db: store.db,
+    stats: store.stats(),
+    embedding: store.embeddingStats(),
+    dbPath: path.resolve(PROJECT_ROOT, cfg.storage.dbPath),
+  })));
+
+  // 调用诊断：失败原因分布 + 降级链路（近 24 小时）
+  app.get('/api/llm/diagnostics', c => c.json(buildCallDiagnostics(store.db)));
+
+  // 用量与成本：按 config/usage.json 的单价估算，不是真实账单
+  app.get('/api/usage', (c) => {
+    const report = buildUsageReport(store.db);
+    // 超预算或突增时每天只提醒一次：面板每 15 秒轮询，不去重会把日志刷爆
+    if (report.budget.level === 'over' || report.spike.level === 'warn') {
+      const key = `usage_alert_${new Date().toISOString().slice(0, 10)}`;
+      let seen: unknown;
+      try {
+        seen = store.db.prepare('SELECT value FROM meta WHERE key=?').get(key);
+      } catch {
+        seen = { value: '1' }; // meta 表异常时不要重复告警
+      }
+      if (!seen) {
+        log.warn(
+          { todayCost: report.today.cost, budget: report.budget, spike: report.spike },
+          report.budget.level === 'over' ? '用量已超预算' : '用量突增',
+        );
+        store.db.prepare('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+          .run(key, String(Date.now()));
+      }
+    }
+    return c.json(report);
+  });
+
+  // ==================== 扫码登录 ====================
+  // 面板里直接看二维码，不用再在宿主机桌面上弹图片窗口。
+  const login = createLoginService(cfg);
+  const panelLoopback = ['127.0.0.1', 'localhost', '::1'].includes(cfg.server.host);
+
+  app.get('/api/login/status', c => {
+    const rt = runtime();
+    const qr = login.qr();
+    const rep = login.repairState();
+    const token = cfg.server.authToken;
+    const qrUrl = `/api/login/qr?ts=${qr.mtimeMs}${
+      token ? `&token=${encodeURIComponent(token)}` : ''}`;
+    return c.json({
+      ok: true,
+      connected: rt.napcatConnected,
+      account: { selfId: rt.selfId, nickname: rt.nickname },
+      onebot: rt.onebot
+        ? {
+            connected: rt.onebot.connected,
+            accountReady: rt.onebot.accountReady,
+            apiReady: rt.onebot.apiReady,
+            implementation: rt.onebot.implementation,
+          }
+        : null,
+      qr: {
+        exists: qr.exists,
+        fresh: qr.exists && qr.ageMs < QR_FRESH_MS,
+        ageMs: qr.exists ? qr.ageMs : null,
+        bytes: qr.bytes,
+        path: qr.path,
+        source: qr.source, // file = 宿主机文件；docker = NapCat 容器内部（云端）
+        url: qrUrl,
+      },
+      napcatDir: login.napcatDir,
+      repair: {
+        running: rep.running,
+        startedAt: rep.startedAt,
+        killQQ: rep.killQQ,
+        log: login.repairLog(),
+      },
+      panel: {
+        host: cfg.server.host,
+        port: cfg.server.port,
+        authTokenSet: Boolean(token),
+        loopbackOnly: panelLoopback,
+        urls: login.panelUrls(cfg.server.host, cfg.server.port),
+      },
+    });
+  });
+
+  app.get('/api/login/qr', c => {
+    const buf = login.png();
+    if (!buf) return c.json({ ok: false, error: '二维码还没有生成' }, 404);
+    // Buffer -> Uint8Array：Hono 的 Data 类型只认后者
+    return c.body(new Uint8Array(buf), 200, {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'no-store, max-age=0',
+      'Content-Length': String(buf.length),
+    });
+  });
+
+  app.post('/api/login/relogin', async c => {
+    let body: { killQQ?: boolean } = {};
+    try {
+      body = (await c.req.json()) as { killQQ?: boolean };
+    } catch {
+      body = {};
+    }
+    const r = login.startRepair({ killQQ: Boolean(body?.killQQ) });
+    if (!r.ok) return c.json({ ok: false, error: r.error }, 409);
+    log.info({ killQQ: Boolean(body?.killQQ), napcatDir: login.napcatDir }, '面板触发扫码登录');
+    return c.json({ ok: true });
+  });
+
+  app.get('/api/login/log', c => c.json({ ok: true, repair: login.repairState(), log: login.repairLog() }));
+
+  // ==================== QQ 空间动态：给谁回、回什么 ====================
+  // 配置文件是 config/qzone-reply.json（qzone-reply.mjs 每次运行都重新读，改完下一轮生效）
+  const qzoneCfgPath = path.join(PROJECT_ROOT, 'config', 'qzone-reply.json');
+  const qzoneStatePath = path.join(PROJECT_ROOT, 'config', 'qzone-reply.state.json');
+
+  const readJsonFile = (p: string): unknown => {
+    try {
+      return JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+
+  const asInt = (v: unknown, def: number, min: number, max: number): number => {
+    const n = Math.round(Number(v));
+    if (!Number.isFinite(n)) return def;
+    return Math.min(max, Math.max(min, n));
+  };
+
+  /** 校验并归一化面板提交的空间动态配置 */
+  const normalizeQzone = (raw: Record<string, unknown>, base: Record<string, any>) => {
+    const watch = Array.isArray(raw['watch']) ? (raw['watch'] as unknown[]) : [];
+    const rcRaw = raw['replyComments'];
+    const rcObj = !Array.isArray(rcRaw) && rcRaw && typeof rcRaw === 'object'
+      ? (rcRaw as Record<string, unknown>)
+      : undefined;
+    const replyWatch: unknown[] = Array.isArray(rcObj?.['watch'])
+      ? (rcObj!['watch'] as unknown[])
+      : Array.isArray(base['replyComments']?.watch)
+        ? (base['replyComments'].watch as unknown[])
+        : [];
+    const seen = new Set<number>();
+    const cleanWatch = watch
+      .map(w => {
+        const o = (w && typeof w === 'object' ? w : {}) as Record<string, unknown>;
+        return { uin: Math.round(Number(o['uin'])), name: String(o['name'] ?? '').slice(0, 32) };
+      })
+      .filter(w => Number.isSafeInteger(w.uin) && w.uin > 0 && !seen.has(w.uin) && (seen.add(w.uin), true));
+    const replySeen = new Set<number>();
+    const cleanReplyWatch = replyWatch
+      .map((v: unknown) => Math.round(Number(v)))
+      .filter((u: number) => Number.isSafeInteger(u) && u > 0 && !replySeen.has(u) && (replySeen.add(u), true));
+
+    const rc = (rcObj ?? {}) as Record<string, unknown>;
+    const limits = (raw['limits'] ?? {}) as Record<string, unknown>;
+    const style = (raw['style'] ?? {}) as Record<string, unknown>;
+    const llm = (raw['llm'] ?? {}) as Record<string, unknown>;
+    const minChars = asInt(style['minChars'], 3, 1, 200);
+    const maxChars = asInt(style['maxChars'], 30, minChars, 500);
+
+    return {
+      // 先铺原有配置，保留未知字段（避免面板把手工加的键吃掉）
+      ...base,
+      enabled: raw['enabled'] !== false,
+      persona: String(raw['persona'] ?? base['persona'] ?? 'shiori').slice(0, 64),
+      llm: {
+        providerKey: String(llm['providerKey'] ?? base['llm']?.providerKey ?? 'deepseek').slice(0, 64),
+        model: String(llm['model'] ?? base['llm']?.model ?? 'deepseek-flash').slice(0, 120),
+      },
+      napcat: { url: String(base['napcat']?.url ?? 'ws://127.0.0.1:3001') },
+      watch: cleanWatch,
+      limits: {
+        perDay: asInt(limits['perDay'], 2, 0, 50),
+        minGapMinutes: asInt(limits['minGapMinutes'], 30, 0, 1440),
+        maxAgeDays: asInt(limits['maxAgeDays'], 2, 1, 30),
+        scanPosts: asInt(limits['scanPosts'], 5, 1, 30),
+      },
+      replyComments: {
+        enabled: rc['enabled'] !== false,
+        watch: cleanReplyWatch,
+        perDay: asInt(rc['perDay'], 3, 0, 50),
+        minGapMinutes: asInt(rc['minGapMinutes'], 5, 0, 1440),
+        maxAgeHours: asInt(rc['maxAgeHours'], 24, 1, 720),
+        scanPosts: asInt(rc['scanPosts'], 5, 1, 30),
+      },
+      style: { minChars, maxChars },
+    };
+  };
+
+  app.get('/api/qzone', c => {
+    const cfgRaw = (readJsonFile(qzoneCfgPath) ?? {}) as Record<string, any>;
+    const state = readJsonFile(qzoneStatePath);
+    return c.json({
+      ok: true,
+      path: qzoneCfgPath,
+      exists: fs.existsSync(qzoneCfgPath),
+      config: cfgRaw,
+      state,
+      runner: 'scripts/qzone-reply.mjs',
+    });
+  });
+
+  app.post('/api/qzone', async c => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const base = (readJsonFile(qzoneCfgPath) ?? {}) as Record<string, any>;
+    try {
+      const next = normalizeQzone(body, base);
+      atomicWrite(qzoneCfgPath, `${JSON.stringify(next, null, 2)}\n`);
+      log.info({ watch: next.watch.length, replyWatch: next.replyComments.watch.length, enabled: next.enabled }, '已更新空间动态配置');
+      return c.json({ ok: true, config: next, message: '已保存，下一轮（≤10 分钟）生效' });
+    } catch (e) {
+      log.warn({ method: c.req.method, route: c.req.path, ...errorDetails(e) }, '保存空间动态配置失败');
+      return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  // 她的「日常」：qzone-reply.mjs 和 self-post.mjs 共用的 life/emoticons/images
+  const qzoneLifePath = path.join(PROJECT_ROOT, 'config', 'qzone-life.json');
+
+  app.get('/api/qzone/life', c => c.json({
+    ok: true,
+    path: qzoneLifePath,
+    config: readJsonFile(qzoneLifePath) ?? {},
+  }));
+
+  app.post('/api/qzone/life', async c => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const base = (readJsonFile(qzoneLifePath) ?? {}) as Record<string, any>;
+    const clamp01 = (v: unknown, def: number): number => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : def;
+    };
+    const life = Array.isArray(body['life'])
+      ? (body['life'] as unknown[]).map(s => String(s).trim()).filter(Boolean).slice(0, 60)
+      : [];
+    const emo = (body['emoticons'] ?? {}) as Record<string, unknown>;
+    const img = (body['images'] ?? {}) as Record<string, unknown>;
+    const list = Array.isArray(emo['list'])
+      ? (emo['list'] as unknown[]).map(s => String(s).trim()).filter(Boolean).slice(0, 24)
+      : (Array.isArray(base['emoticons']?.list) ? base['emoticons'].list : []);
+    const next = {
+      note: base['note'] ?? '',
+      life,
+      emoticons: { enabled: emo['enabled'] !== false, chance: clamp01(emo['chance'], 0.35), list },
+      images: {
+        enabled: img['enabled'] === true,
+        dir: String(img['dir'] ?? base['images']?.dir ?? 'refs/qzone').slice(0, 200),
+        chance: clamp01(img['chance'], 0.5),
+      },
+    };
+    try {
+      atomicWrite(qzoneLifePath, `${JSON.stringify(next, null, 2)}\n`);
+      return c.json({ ok: true, config: next, message: '已保存，下一轮生效' });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  /** 立即跑一次（dry = 只看会说什么，不发） */  app.post('/api/qzone/run', async c => {
+    const body = (await c.req.json().catch(() => ({}))) as { dry?: boolean; force?: boolean };
+    const args = [path.join(PROJECT_ROOT, 'scripts', 'qzone-reply.mjs')];
+    if (body.dry) args.push('--dry');
+    else if (body.force) args.push('--force');
+    try {
+      const out = await new Promise<string>((resolve) => {
+        let buf = '';
+        const child = spawn(process.execPath, args, { cwd: PROJECT_ROOT, windowsHide: true });
+        const timer = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            /* 已退出 */
+          }
+          resolve(buf + '\n[超时 90 秒，已终止]');
+        }, 90000);
+        child.stdout?.on('data', (d: Buffer) => {
+          if (buf.length < 12000) buf += d.toString('utf8');
+        });
+        child.stderr?.on('data', (d: Buffer) => {
+          if (buf.length < 12000) buf += d.toString('utf8');
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          resolve(`${buf}\n[退出码 ${code}]`);
+        });
+        child.on('error', (e) => {
+          clearTimeout(timer);
+          resolve(`${buf}\n[启动失败 ${e.message}]`);
+        });
+      });
+      return c.json({ ok: true, output: out.trim() });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 500);
+    }
+  });
+
+  // ==================== 主动发言：活跃度预设 ====================
+  // 让用户手算 8 个数字太麻烦；四档预设一键写入，之后仍可逐项微调。
+  const PROACTIVE_PRESETS: Record<string, Record<string, unknown>> = {
+    quiet: {
+      everyNMessages: 12, probability: 0.15, relevanceProbability: 0.45,
+      maxPerHourPerScope: 2, minIntervalMs: 1200000, minGapAfterBotMs: 300000,
+      quietHours: ['23:00-08:00'],
+    },
+    normal: {
+      everyNMessages: 8, probability: 0.3, relevanceProbability: 0.7,
+      maxPerHourPerScope: 3, minIntervalMs: 600000, minGapAfterBotMs: 180000,
+      quietHours: ['23:00-08:00'],
+    },
+    active: {
+      everyNMessages: 5, probability: 0.5, relevanceProbability: 0.85,
+      maxPerHourPerScope: 6, minIntervalMs: 300000, minGapAfterBotMs: 90000,
+      quietHours: ['00:30-07:30'],
+    },
+    wild: {
+      everyNMessages: 3, probability: 0.7, relevanceProbability: 0.95,
+      maxPerHourPerScope: 12, minIntervalMs: 120000, minGapAfterBotMs: 45000,
+      quietHours: ['01:00-07:00'],
+    },
+  };
+
+  app.post('/api/proactive/preset', async c => {
+    const body = (await c.req.json().catch(() => ({}))) as { level?: string };
+    const level = String(body.level ?? '');
+    const preset = PROACTIVE_PRESETS[level];
+    if (!preset) return c.json({ ok: false, error: 'level 只能是 quiet / normal / active / wild' }, 400);
+    const patch: Record<string, unknown> = { 'proactive.mode': 'hybrid', 'proactive.enabled': true };
+    for (const [k, v] of Object.entries(preset)) patch[`proactive.${k}`] = v;
+    try {
+      const changed = deps.updateSettings(patch);
+      log.info({ level, changed }, '已应用主动发言预设');
+      return c.json({ ok: true, level, changed, message: `已应用「${level}」预设（${changed} 项生效）` });
+    } catch (e) {
+      log.warn({ method: c.req.method, route: c.req.path, ...errorDetails(e) }, '应用主动发言预设失败');
+      return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  // 打开局域网访问：改 server.host 为 0.0.0.0 并确保有 authToken（需要重启生效）。
+  // 手机要能打开面板扫码，这一步是前提——回环地址手机连不上。
+  app.post('/api/login/open-lan', async c => {
+    const configFile = path.join(PROJECT_ROOT, 'config', 'app.yaml');
+    const hadToken = Boolean(cfg.server.authToken);
+    const token = hadToken ? cfg.server.authToken : crypto.randomBytes(12).toString('hex');
+    try {
+      setConfigValues(configFile, [
+        [['server', 'host'], '0.0.0.0'],
+        [['server', 'authToken'], token],
+      ]);
+    } catch (e) {
+      return c.json({ ok: false, error: `写配置失败: ${(e as Error).message}` }, 500);
+    }
+    log.info({ host: '0.0.0.0', tokenGenerated: !hadToken }, '面板已开放局域网访问（重启后生效）');
+    return c.json({
+      ok: true,
+      restartRequired: true,
+      host: '0.0.0.0',
+      token,
+      tokenGenerated: !hadToken,
+      urls: login.panelUrls('0.0.0.0', cfg.server.port),
+    });
+  });
+
   app.get('/api/speech/status',c=>c.json({ok:true,status:deps.speechStatus?.()??null}));
   app.get('/api/tasks',c=>c.json({ok:true,tasks:deps.tasks?.list(c.req.query('scope'))??[],runs:store.db.prepare('SELECT * FROM scheduled_task_runs ORDER BY created_at DESC LIMIT 100').all(),timezone:cfg.app.timezone}));
   app.post('/api/tasks',async c=>{if(!deps.tasks)return c.json({ok:false,error:'服务未启动'},503);try{const body=await c.req.json();if(!['reminder','digest'].includes(body.kind)||typeof body.scope!=='string'||!Number.isSafeInteger(body.ownerId)||body.ownerId<=0)throw Error('任务参数无效');
@@ -581,6 +958,68 @@ export function createServer(deps: ServerDeps): { app: Hono; start: () => void; 
     } catch (e) { log.warn({method:c.req.method,route:c.req.path,...errorDetails(e)}, '管理接口处理失败');
       return c.json({ ok: false, error: (e as Error).message }, 400);
     }
+  });
+
+  // ==================== 群级策略 ====================
+  // 全局配置解决「默认怎么表现」，这里解决「某个群想不一样」。
+  // 存储是 config/groups.json，按群号索引，字段出现才覆盖。
+  app.get('/api/groups', (c) => {
+    const overrides = loadGroupOverrides();
+    const known = store.db
+      .prepare("SELECT scope, title, last_active FROM sessions WHERE scope_type='group' ORDER BY last_active DESC LIMIT 200")
+      .all() as unknown as Array<{ scope: string; title: string | null; last_active: number }>;
+    const groups = known.map((s) => {
+      const id = s.scope.slice('group:'.length);
+      return { id, scope: s.scope, title: s.title || '', lastActive: s.last_active, override: overrides[id] ?? null };
+    });
+    // 配了覆盖但还没聊过的群也要能看到，否则面板里改过就消失了
+    for (const [id, ov] of Object.entries(overrides)) {
+      if (!groups.some((g) => g.id === id)) {
+        groups.push({ id, scope: `group:${id}`, title: '', lastActive: 0, override: ov });
+      }
+    }
+    return c.json({
+      ok: true,
+      groups,
+      defaults: {
+        enabled: cfg.proactive.enabled,
+        mode: cfg.proactive.mode,
+        requireAt: cfg.trigger.group.requireAt,
+        keywords: cfg.trigger.group.keywords,
+        prefixes: cfg.trigger.group.prefixes,
+        quietHours: cfg.proactive.quietHours,
+        everyNMessages: cfg.proactive.everyNMessages,
+        maxPerHourPerScope: cfg.proactive.maxPerHourPerScope,
+        minIntervalMs: cfg.proactive.minIntervalMs,
+      },
+    });
+  });
+
+  app.post('/api/groups/:id', async (c) => {
+    const id = c.req.param('id');
+    if (!/^\d+$/.test(id) || Number(id) <= 0) return c.json({ ok: false, error: '群号不合法' }, 400);
+    const body = await c.req.json().catch(() => null);
+    try {
+      const normalized = normalizeGroupOverride(body);
+      const all = loadGroupOverrides();
+      if (Object.keys(normalized).length === 0) delete all[id];
+      else all[id] = normalized;
+      saveGroupOverrides(all);
+      log.info({ groupId: id, keys: Object.keys(normalized) }, '群级策略已保存');
+      return c.json({ ok: true, override: all[id] ?? null });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  app.delete('/api/groups/:id', (c) => {
+    const id = c.req.param('id');
+    const all = loadGroupOverrides();
+    if (!all[id]) return c.json({ ok: true, removed: false });
+    delete all[id];
+    saveGroupOverrides(all);
+    log.info({ groupId: id }, '群级策略已清除');
+    return c.json({ ok: true, removed: true });
   });
 
   // ==================== 人格 ====================
@@ -1177,6 +1616,44 @@ export function createServer(deps: ServerDeps): { app: Hono; start: () => void; 
     if (!Number.isFinite(id)) return c.json({ ok: false, error: '非法 id' }, 400);
     store.deleteFact(id);
     return c.json({ ok: true });
+  });
+
+  // ==================== 记忆：召回解释与待确认 ====================
+  // 召回记录：某次回复到底用了哪些记忆、每条从哪条路命中
+  app.get('/api/memory/recalls', (c) => {
+    const scope = c.req.query('scope');
+    const raw = Number(c.req.query('limit') ?? 50);
+    const limit = Number.isFinite(raw) ? Math.min(200, Math.max(1, Math.floor(raw))) : 50;
+    return c.json({ ok: true, records: store.listRecalls({ scope: scope || undefined, limit }) });
+  });
+
+  // 待确认记忆：抽取器写进来但还没被人工确认的「建议」
+  app.get('/api/memory/pending', (c) => {
+    const userId = Number(c.req.query('userId') ?? 0);
+    const scope = c.req.query('scope');
+    return c.json({
+      ok: true,
+      records: store.listPendingFacts({
+        userId: Number.isSafeInteger(userId) && userId > 0 ? userId : undefined,
+        scope: scope || undefined,
+        limit: 200,
+      }),
+    });
+  });
+
+  // 确认 / 驳回一条待确认记忆
+  app.post('/api/memory/facts/:id/review', async (c) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isSafeInteger(id) || id <= 0) return c.json({ ok: false, error: '无效的事实 id' }, 400);
+    const body = (await c.req.json().catch(() => null)) as { state?: unknown } | null;
+    const state = body?.state;
+    if (state !== 'confirmed' && state !== 'rejected') {
+      return c.json({ ok: false, error: 'state 只能是 confirmed 或 rejected' }, 400);
+    }
+    const row = store.setFactReviewState(id, state);
+    if (!row) return c.json({ ok: false, error: '事实不存在或已删除' }, 404);
+    log.info({ factId: id, state, userId: row.user_id }, state === 'confirmed' ? '记忆已确认' : '记忆已驳回');
+    return c.json({ ok: true, fact: { id: row.id, content: row.content, reviewState: state } });
   });
 
   /** 搜索记忆 */

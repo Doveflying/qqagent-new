@@ -20,10 +20,86 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
 const CFG_PATH = path.join(REPO, 'config', 'qzone-reply.json');
 const STATE_PATH = path.join(REPO, 'config', 'qzone-reply.state.json');
+const LIFE_PATH = path.join(REPO, 'config', 'qzone-life.json');
+
+/** config/qzone-life.json 的兜底值（文件缺失也能跑） */
+const LIFE_FALLBACK = {
+  life: [],
+  emoticons: { enabled: true, chance: 0.35, list: ['😅', '🙃', '🥲', '😴', '🤔', '😑'] },
+};
+
+function loadLife() {
+  const raw = readJson(LIFE_PATH, {}) || {};
+  return { ...LIFE_FALLBACK, ...raw };
+}
+
+const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : '');
+
+function timeOfDay(d = new Date()) {
+  const h = d.getHours();
+  if (h < 6) return '凌晨';
+  if (h < 9) return '早上';
+  if (h < 12) return '上午';
+  if (h < 14) return '中午';
+  if (h < 18) return '下午';
+  if (h < 22) return '晚上';
+  return '深夜';
+}
+
+/** 每次调用随机抽一条写法指令，避免每条评论都同一个腔调 */
+const STYLE_HINTS = [
+  '这次写短一点，短到像随手两个字也行',
+  '这次可以顺带说一句自己现在在干嘛',
+  '这次只挑动态里的一个细节说，别整条都评价',
+  '这次语气平淡一点，不必热情',
+  '这次可以反问一句，但只问一个问题',
+  '这次可以带点不服气，抬他一句',
+  '这次不要用省略号开头，也不要用"又""还"开头',
+  '这次可以自嘲一句',
+];
+
+/**
+ * 把「她此刻是谁、在干嘛、最近说过什么」整理成提示词片段。
+ * 这是让评论不像同一个模子刻出来的关键：状态在变、写法在变、还明确禁止重复自己。
+ */
+function humanContext(life, state) {
+  const recent = Array.isArray(state.recentTexts) ? state.recentTexts.slice(-8) : [];
+  const openers = [...new Set(recent.map((t) => String(t).slice(0, 3)).filter((x) => x.length >= 2))].slice(0, 4);
+  const emo = life.emoticons || {};
+  const useEmoji = emo.enabled !== false && Math.random() < Number(emo.chance ?? 0.35);
+  return {
+    lifeLine: pick(life.life || []),
+    styleHint: pick(STYLE_HINTS),
+    time: timeOfDay(),
+    recent,
+    openers,
+    useEmoji,
+    emoji: useEmoji ? pick(emo.list || ['😅', '🙃', '🥲']) : '',
+  };
+}
+
+/** 拼进 system prompt 的拟人化片段 */
+function humanPrompt(h) {
+  const lines = [];
+  if (h.lifeLine) lines.push(`你现在的生活状态：${h.lifeLine}（可以自然带出来，但别硬塞，也可以只当背景）`);
+  lines.push(`现在是${h.time}，说话不必像刚睡醒那样敷衍，也不必刻意兴奋。`);
+  lines.push(`这次的处理方式：${h.styleHint}。`);
+  if (h.recent.length) lines.push(`你最近在空间里说过这些话：${h.recent.map((t) => `「${t}」`).join('')}。这次别再用同样的句式和说法。`);
+  if (h.openers.length) lines.push(`也别再用这些开头：${h.openers.map((t) => `「${t}」`).join('')}。`);
+  lines.push(h.useEmoji
+    ? `可以在这句话后面带一个表情符号（最多一个，从这些里选：${(h.emoji || '🙃')}），不要带多个。`
+    : '不要用任何 emoji 表情符号。');
+  return lines.join('\n');
+}
+
 
 const args = new Set(process.argv.slice(2));
 const DRY = args.has('--dry');
 const FORCE = args.has('--force');
+/** 只读诊断：打印她最近几条说说下的评论，不发任何东西 */
+const PROBE = args.has('--probe');
+/** 只读诊断：逐条说明"会回 / 为什么跳过" */
+const EXPLAIN = args.has('--explain');
 
 /** 取 --name value 形式的参数 */
 function arg(name) {
@@ -71,8 +147,41 @@ function cookieValue(cookies, name) {
   const m = cookies.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
   return m?.[1] ?? '';
 }
+
+/**
+ * 统一 QQ 号：接口有时返回数字，有时返回字符串，有时带 "o0" 前缀。
+ * 以前直接用 `c.uin === Number(selfUin)` 判断"是不是她自己"，字符串一来就永远不等，
+ * 于是她会回复自己的评论 —— 每轮都回，就成了"一直在自言自语"。
+ */
+function normUin(value) {
+  const s = String(value ?? '').trim().replace(/^o0*/, '');
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
 function dayKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 连续失败先歇一阵。这条链路是非官方接口，被风控时每 10 分钟撞一次只会更糟，
+ * 停 6 小时反而更容易恢复。
+ */
+const FAIL_STREAK_LIMIT = 3;
+const FAIL_PAUSE_MS = 6 * 60 * 60 * 1000;
+
+function noteFailure(state) {
+  state.failStreak = Number(state.failStreak ?? 0) + 1;
+  state.failCount = Number(state.failCount ?? 0) + 1;
+  state.lastAttemptAt = Date.now();
+  if (state.failStreak >= FAIL_STREAK_LIMIT) {
+    state.pausedUntil = Date.now() + FAIL_PAUSE_MS;
+    log(`连续失败 ${state.failStreak} 次，暂停到 ${new Date(state.pausedUntil).toLocaleString('zh-CN')}`);
+  }
+}
+
+function noteSuccess(state) {
+  state.failStreak = 0;
+  state.pausedUntil = 0;
 }
 function stripTags(html) {
   return String(html ?? '')
@@ -82,6 +191,27 @@ function stripTags(html) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/**
+ * 这条评论是否已经被她回过。
+ *
+ * 判据：她在这条评论之后、**下一条别人的评论之前**发过言。
+ *
+ * 不能只写「她在这条之后发过言」——她回了 B 之后，时间上晚于 A 的回复
+ * 会让 A 也判成「已回过」，A 就永远等不到回复了。加了「下一条他人评论」
+ * 这个上界，才分得清她的回复到底是给谁的。
+ */
+export function alreadyAnswered(comments, c, selfId) {
+  let nextOtherAt = null;
+  for (const o of comments) {
+    if (o.uin === selfId || o.createdAt <= c.createdAt) continue;
+    if (nextOtherAt == null || o.createdAt < nextOtherAt) nextOtherAt = o.createdAt;
+  }
+  return comments.some(
+    (o) => o.uin === selfId && o.createdAt > c.createdAt && (nextOtherAt == null || o.createdAt < nextOtherAt),
+  );
+}
+
 
 /** 连 OneBot，调一个 action，等 echo 回执 */
 function callOneBot(url, action, params, timeoutMs = 20000) {
@@ -130,10 +260,10 @@ function parseJsonp(text) {
   }
 }
 
-/** 读某人最近的说说 */
-async function listPosts(s, uin, num = 5) {
+/** 读某人最近的说说。replynum = 每帖带回多少条评论（0 = 服务端默认） */
+async function listPosts(s, uin, num = 5, replynum = 0) {
   const url = 'https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6'
-    + `?uin=${uin}&ftype=0&sort=0&pos=0&num=${num}&replynum=0&g_tk=${s.gtk}`
+    + `?uin=${uin}&ftype=0&sort=0&pos=0&num=${num}&replynum=${replynum}&g_tk=${s.gtk}`
     + '&code_of_conduct=1&format=json&need_private_comment=1';
   const res = await fetch(url, {
     headers: { Cookie: s.cookies, Referer: `https://user.qzone.qq.com/${uin}` },
@@ -145,12 +275,12 @@ async function listPosts(s, uin, num = 5) {
   if (doc.code && doc.code !== 0) throw new Error(`读说说 code=${doc.code} ${doc.message ?? ''}`);
   return (doc.msglist ?? []).map((m) => ({
     tid: String(m.tid ?? ''),
-    uin: Number(m.uin ?? uin),
+    uin: normUin(m.uin ?? uin),
     content: stripTags(m.content),
     createdAt: Number(m.created_time ?? 0) * 1000,
     commentCount: Number(m.cmntnum ?? m.commentlist?.length ?? 0),
     comments: (m.commentlist ?? []).map((c) => ({
-      uin: Number(c.uin ?? 0),
+      uin: normUin(c.uin ?? 0),
       name: String(c.name ?? ''),
       content: stripTags(c.content),
       createdAt: Number(c.create_time ?? 0) * 1000,
@@ -207,7 +337,7 @@ async function comment(s, targetUin, tid, content) {
   return doc;
 }
 
-async function generateComment(cfg, post, who) {
+async function generateComment(cfg, post, who, h) {
   const creds = providerCreds(cfg.llm?.providerKey);
   if (!creds?.apiKey) throw new Error(`供应商 ${cfg.llm?.providerKey} 没有可用的 API Key`);
   const min = cfg.style?.minChars ?? 3;
@@ -216,10 +346,11 @@ async function generateComment(cfg, post, who) {
     personaPrompt(cfg.persona),
     '',
     `你在 QQ 空间看到${who || '对方'}发了一条动态，要评论一句。`,
-    `要求：${min}~${max} 字，一句话，口语，别客套，别用 emoji；`,
+    `要求：${min}~${max} 字，一句话，口语，别客套；`,
     '像随手打的，可以吐槽、可以接他的话、可以只评价其中某个细节；不要问一堆问题。',
+    h ? humanPrompt(h) : '',
     '直接输出评论正文。',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   const res = await fetch(`${creds.baseURL}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${creds.apiKey}` },
@@ -229,7 +360,7 @@ async function generateComment(cfg, post, who) {
         { role: 'system', content: system },
         { role: 'user', content: `动态内容：${post.content.slice(0, 500)}\n\n写一句评论。` },
       ],
-      temperature: 0.95,
+      temperature: 0.9 + Math.random() * 0.2,
       max_tokens: 1000,
     }),
     signal: AbortSignal.timeout(45000),
@@ -243,7 +374,7 @@ async function generateComment(cfg, post, who) {
 }
 
 /** 生成一条"回复别人评论"的话 */
-async function generateCommentReply(cfg, post, c) {
+async function generateCommentReply(cfg, post, c, h) {
   const creds = providerCreds(cfg.llm?.providerKey);
   if (!creds?.apiKey) throw new Error(`供应商 ${cfg.llm?.providerKey} 没有可用的 API Key`);
   const min = cfg.style?.minChars ?? 3;
@@ -253,8 +384,9 @@ async function generateCommentReply(cfg, post, c) {
     '',
     '你之前发了一条说说，现在有人在下面评论了。你要回他一句。',
     `要求：${min}~${max} 字，一句话，口语；可以顺着他说、反驳他、或者只吐槽其中一个点；`,
-    '不用客套，不用 emoji，别问一堆问题，直接输出回复正文。',
-  ].join('\n');
+    '不用客套，别问一堆问题，直接输出回复正文。',
+    h ? humanPrompt(h) : '',
+  ].filter(Boolean).join('\n');
   const user = [
     `你的说说：${post.content.slice(0, 200)}`,
     `${c.name || '对方'}的评论：${c.content.slice(0, 200)}`,
@@ -267,7 +399,7 @@ async function generateCommentReply(cfg, post, c) {
     body: JSON.stringify({
       model: cfg.llm?.model || 'deepseek-flash',
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      temperature: 0.95,
+      temperature: 0.9 + Math.random() * 0.2,
       max_tokens: 1000,
     }),
     signal: AbortSignal.timeout(45000),
@@ -280,11 +412,61 @@ async function generateCommentReply(cfg, post, c) {
   return text.slice(0, max + 10);
 }
 
+/**
+ * 发送后回读校验。
+ *
+ * 空间接口有个坑：返回 code:0 不等于评论真的出现了（剥壳失败、风控吞掉都会这样）。
+ * 用详情接口按 tid 拿全量评论，找不到自己刚发的那条就当没发成功，留给下一轮重试 ——
+ * 不然会被永久记成"已回复"，对方永远等不到回应。
+ */
+async function verifyPosted(s, tid, text) {
+  try {
+    const comments = await listCommentsDetail(s, Number(s.selfUin), tid, 50);
+    const head = String(text).replace(/\s+/g, '').slice(0, 6);
+    return comments.some(
+      (c) => c.uin === normUin(s.selfUin) && String(c.content).replace(/\s+/g, '').includes(head),
+    );
+  } catch (e) {
+    // 校验本身失败不阻断：按已发送处理，避免重复刷屏
+    log(`  回读校验出错（按已发送处理）：${e.message}`);
+    return true;
+  }
+}
+
+/**
+ * 单条说说的评论详情（msgdetail 接口）。msglist 每帖只回传最近几条评论，
+ * 她回得多了会把别人的评论挤出去；详情接口有时能拿到更全的列表。
+ */
+async function listCommentsDetail(s, uin, tid, num = 30) {
+  const url = 'https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msgdetail_v6'
+    + `?uin=${uin}&tid=${tid}&num=${num}&g_tk=${s.gtk}&format=json&need_private_comment=1`;
+  const res = await fetch(url, {
+    headers: { Cookie: s.cookies, Referer: `https://user.qzone.qq.com/${uin}` },
+    signal: AbortSignal.timeout(20000),
+  });
+  const doc = parseJsonp(await res.text());
+  if (!res.ok) throw new Error(`读评论详情 HTTP ${res.status}`);
+  if (doc.code && doc.code !== 0) throw new Error(`读评论详情 code=${doc.code} ${doc.message ?? ''}`);
+  return (doc.commentlist ?? []).map((c) => ({
+    uin: normUin(c.uin ?? 0),
+    name: String(c.name ?? ''),
+    content: stripTags(c.content),
+    createdAt: Number(c.create_time ?? 0) * 1000,
+  })).filter((c) => c.content);
+}
+
 async function main() {
   const cfg = readJson(CFG_PATH);
   if (!cfg) fail(`读不到配置 ${CFG_PATH}`);
   const watch = (cfg.watch ?? []).filter((w) => Number.isFinite(Number(w?.uin)));
-  if (watch.length === 0) fail('config/qzone-reply.json 的 watch 里没有要回复的人');
+  // 评论别人和回复评论是两个独立开关：可以只开其中一个。
+  // （以前 watch 为空直接 fail，导致"只回复评论"根本跑不起来。）
+  const rcCfg = cfg.replyComments ?? {};
+  const replyEnabled = rcCfg.enabled !== false;
+  if (watch.length === 0 && !replyEnabled) {
+    fail('watch（评论别人）和 replyComments（回复评论）都关着，没有可做的事');
+  }
+  if (watch.length === 0) log('未配置评论对象：跳过「评论别人的说说」，只做评论回复');
   if (!cfg.enabled && !FORCE) { log('已关闭（enabled=false）'); return; }
 
   const now = Date.now();
@@ -293,7 +475,14 @@ async function main() {
   state.dayKey ??= today;
   state.seen ??= {};
   state.count ??= 0;
+  state.recentTexts ??= [];
   if (state.dayKey !== today) { state.dayKey = today; state.count = 0; }
+  // 连续失败后暂停中：直接退出，别再去撞接口（--force 可强制跑一次）
+  if (!FORCE && !DRY && state.pausedUntil && now < state.pausedUntil) {
+    log(`上次连续失败后暂停中，${new Date(state.pausedUntil).toLocaleString('zh-CN')} 之后再试（--force 可强制）`);
+    return;
+  }
+  const life = loadLife();
 
   const limits = cfg.limits ?? {};
   const perDay = Number(limits.perDay ?? 2);
@@ -312,8 +501,38 @@ async function main() {
   const s = await session(napcatUrl);
   log(`会话就绪：self=${s.selfUin} g_tk=${s.gtk}`);
 
+  // --probe：只读诊断。看它到底能"看见"她最近几条说说下的哪些评论，
+  // 用来回答「是不是每个人都回了」——能不能回，前提是能看见。
+  if (PROBE) {
+    const probeN = Number(cfg.replyComments?.scanPosts ?? 5);
+    const base = await listPosts(s, Number(s.selfUin), probeN, 0);
+    const wide = await listPosts(s, Number(s.selfUin), probeN, 20);
+    log(`最近 ${base.length} 条说说；对比「replynum=0」和「replynum=20」能看到几条评论：`);
+    for (let i = 0; i < base.length; i++) {
+      const a = base[i];
+      const b = wide[i] ?? { comments: [] };
+      log(`  ${a.tid} · ${new Date(a.createdAt).toLocaleString('zh-CN')} · 服务端说共 ${a.commentCount} 条 · replynum=0 看到 ${a.comments.length} · replynum=20 看到 ${b.comments.length}`);
+      for (const c of b.comments.length >= a.comments.length ? b.comments : a.comments) {
+        const mine = c.uin === normUin(s.selfUin);
+        log(`     - ${mine ? '[她自己]' : c.name || c.uin} @${new Date(c.createdAt).toLocaleString('zh-CN')}：${String(c.content).slice(0, 24)}`);
+      }
+      // msglist 每帖只回传最近几条；详情接口能不能拿全？
+      try {
+        const detail = await listCommentsDetail(s, Number(s.selfUin), a.tid, 30);
+        log(`     [详情接口] 拿到 ${detail.length} 条（msglist 给的是 ${a.comments.length} 条）`);
+      } catch (e) {
+        log(`     [详情接口] 失败：${e.message}`);
+      }
+    }
+    return;
+  }
+
   let acted = 0;
+  // 一轮最多回/评 1 条：minGapMinutes 只在开跑前检查一次，一轮里连发几条会让
+  // 实际间隔变成几秒（实测出现过 23:22:58 与 23:23:02 两条），既不像人也不抗风控。
+  const PER_RUN_MAX = 1;
   for (const w of watch) {
+    if (acted >= PER_RUN_MAX) break;
     const uin = Number(w.uin);
     if (state.count >= perDay && !DRY) break;
     let posts = [];
@@ -327,7 +546,7 @@ async function main() {
       if (now - post.createdAt > maxAgeDays * 86400000) { seen.push(post.tid); continue; }
 
       let text;
-      try { text = await generateComment(cfg, post, w.name); }
+      try { text = await generateComment(cfg, post, w.name, humanContext(life, state)); }
       catch (e) { log(`生成评论失败：${e.message}`); continue; }
       log(`${w.name || uin} 新动态（${new Date(post.createdAt).toLocaleString('zh-CN')}）：${post.content.slice(0, 40)}`);
       log(`  → 评论：${text}`);
@@ -335,28 +554,37 @@ async function main() {
       if (DRY) { seen.push(post.tid); continue; }
       try {
         await comment(s, uin, post.tid, text);
+        const landed = await verifyPosted(s, post.tid, text);
+        if (!landed && !DRY) {
+          log('  ⚠ 接口返回成功但帖子里没看到这条评论，下轮重试');
+          continue;   // 不 push seen、不计数，留给下一轮
+        }
         seen.push(post.tid);
         state.count += 1;
         state.lastAt = Date.now();
         state.lastText = text;
+        state.recentTexts = [...state.recentTexts, text].slice(-8);
         acted += 1;
-        log(`  ✓ 已评论`);
+        noteSuccess(state);
+        log('  ✓ 已评论（回读确认）');
       } catch (e) {
         log(`  ✗ ${e.message}`);
-        state.failCount = Number(state.failCount ?? 0) + 1;
-        state.lastAttemptAt = Date.now();
+        noteFailure(state);
       }
       if (state.count >= perDay) break;
+      if (acted >= PER_RUN_MAX) break;
     }
     state.seen[uin] = seen.slice(-100);
   }
 
-  // ---- 回复她自己的说说下面、白名单里的人的评论 ----
+  // ---- 回复她自己的说说下面的评论 ----
   // Qzone 的评论没有 id（只有 uin + create_time + content），所以去重用这三样拼
   const rc = cfg.replyComments ?? {};
   let replied = 0;
   if (rc.enabled !== false) {
-    const watchComments = (rc.watch ?? watch.map((w) => w.uin)).map(Number);
+    // 空名单 = 谁都回（别人评论了就回）；填了人才按名单过滤
+    const watchComments = (Array.isArray(rc.watch) ? rc.watch : []).map(Number).filter((n) => n > 0);
+    const replyAnyone = watchComments.length === 0;
     const rcPerDay = Number(rc.perDay ?? 3);
     const rcGapMs = Number(rc.minGapMinutes ?? 5) * 60 * 1000;
     const maxAgeH = Number(rc.maxAgeHours ?? 24);
@@ -371,17 +599,54 @@ async function main() {
       try { own = await listPosts(s, Number(s.selfUin), Number(rc.scanPosts ?? 5)); }
       catch (e) { log(`读自己的说说失败：${e.message}`); }
 
+      const selfId = normUin(s.selfUin);
       for (const post of own) {
         if (state.replyCount >= rcPerDay && !DRY) break;
-        for (const c of post.comments) {
-          if (c.uin === Number(s.selfUin)) continue;                 // 自己的评论不回
-          if (!watchComments.includes(c.uin)) continue;              // 只回白名单
+        // msglist 每帖带回最近几条评论，够用就不再多打一次详情接口：
+        // 只有「一条别人的评论都没有」、且服务端说总数更多时，才怀疑是被她自己的回复挤掉了。
+        let comments = post.comments;
+        const hasOther = post.comments.some((c) => c.uin !== selfId);
+        // --explain 是诊断，宁可多打一次请求也要看到全量
+        if (EXPLAIN || (!hasOther && post.commentCount > post.comments.length)) {
+          try {
+            comments = await listCommentsDetail(s, Number(s.selfUin), post.tid, 50);
+          } catch (e) {
+            log(`  读评论详情失败，退回 msglist（${post.comments.length} 条）：${e.message}`);
+          }
+        }
+        for (const c of comments) {
+          const isSelf = c.uin === selfId;
           const key = `${post.tid}|${c.uin}|${c.createdAt}`;
-          if ((state.replySeen[key] ?? false) === true) continue;
-          if (now - c.createdAt > maxAgeH * 3600000) { state.replySeen[key] = true; continue; }
+          const already = (state.replySeen[key] ?? false) === true;
+          const tooOld = now - c.createdAt > maxAgeH * 3600000;
+          const inList = replyAnyone || watchComments.includes(c.uin);
+          // 她在这条评论之后、下一条他人评论之前发过言 = 这条回过了。
+          // 不靠 replySeen 单点判断：状态丢了、key 变了也不会重复回。
+          const answered = alreadyAnswered(comments, c, selfId);
+          // 兜底：内容和她说过的某句重复，就不再回（防止自己接自己的话）
+          const echoesSelf = (state.recentTexts ?? []).some(
+            (t) => String(t).replace(/\s+/g, '') === String(c.content).replace(/\s+/g, ''),
+          );
+          if (EXPLAIN) {
+            const what = isSelf ? '跳过（她自己的）'
+              : answered ? '跳过（已回过）'
+                : already ? '跳过（已回过）'
+                  : !inList ? '跳过（不在名单）'
+                    : tooOld ? '跳过（超出时间窗）'
+                      : echoesSelf ? '跳过（和她刚说的一样）'
+                        : '会回复';
+            log(`  ${what} ← ${isSelf ? '[她自己]' : c.name || c.uin} @${new Date(c.createdAt).toLocaleString('zh-CN')}：${String(c.content).slice(0, 18)}`);
+            continue;
+          }
+          if (isSelf) continue;                                     // 自己的评论不回
+          if (answered) { state.replySeen[key] = true; continue; }  // 已经回过
+          if (!inList) continue;                                    // 填了名单才过滤
+          if (already) continue;
+          if (echoesSelf) { state.replySeen[key] = true; continue; }
+          if (tooOld) { state.replySeen[key] = true; continue; }
 
           let text;
-          try { text = await generateCommentReply(cfg, post, c); }
+          try { text = await generateCommentReply(cfg, post, c, humanContext(life, state)); }
           catch (e) { log(`生成回复失败：${e.message}`); continue; }
           log(`${c.name || c.uin} 评论了她的说说：${c.content.slice(0, 30)}`);
           log(`  → 回复：${text}`);
@@ -389,17 +654,27 @@ async function main() {
           if (DRY) { state.replySeen[key] = true; continue; }
           try {
             await comment(s, Number(s.selfUin), post.tid, text);
+            const landed = await verifyPosted(s, post.tid, text);
+            if (!landed) {
+              log('  ⚠ 接口返回成功但空间里没看到这条回复，留到下一轮重试');
+              continue;   // 不记 replySeen、不计数
+            }
             state.replySeen[key] = true;
             state.replyCount += 1;
             state.replyLastAt = Date.now();
             state.replyLastText = text;
+            state.recentTexts = [...state.recentTexts, text].slice(-8);
             replied += 1;
-            log(`  ✓ 已回复`);
+            noteSuccess(state);
+            log('  ✓ 已回复（回读确认）');
           } catch (e) {
             log(`  ✗ ${e.message}`);
+            noteFailure(state);
           }
           if (state.replyCount >= rcPerDay) break;
+          if (replied >= PER_RUN_MAX) break;   // 一轮只回一条，保证真实的分钟级间隔
         }
+        if (replied >= PER_RUN_MAX) break;
       }
       // 只保留最近 200 条，避免状态文件无限膨胀
       const keys = Object.keys(state.replySeen);
@@ -417,4 +692,6 @@ async function main() {
   log(`完成，本次评论 ${acted} 条、回复 ${replied} 条；今天评论 ${state.count}/${perDay}、回复 ${state.replyCount ?? 0}`);
 }
 
-main().catch((e) => { console.error(`[qzone] 失败：${e?.message ?? e}`); process.exit(1); });
+// 只有直接运行时才跑 main()：被测试 import 时不应该真的去连 OneBot。
+const isEntry = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isEntry) main().catch((e) => { console.error(`[qzone] 失败：${e?.message ?? e}`); process.exit(1); });

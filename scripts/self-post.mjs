@@ -15,13 +15,37 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..');
 const CFG_PATH = path.join(REPO, 'config', 'self-post.json');
 const STATE_PATH = path.join(REPO, 'config', 'self-post.state.json');
+const LIFE_PATH = path.join(REPO, 'config', 'qzone-life.json');
+
+/** 和 qzone-reply.mjs 共用同一份「日常」配置 */
+function loadLife() {
+  const raw = readJson(LIFE_PATH, {}) || {};
+  return {
+    life: Array.isArray(raw.life) ? raw.life : [],
+    emoticons: raw.emoticons || { enabled: true, chance: 0.3, list: ['😅', '🙃', '🥲', '😴'] },
+    images: raw.images || { enabled: false, dir: 'refs/qzone', chance: 0.5 },
+  };
+}
+
+const pick = (arr) => (arr && arr.length ? arr[Math.floor(Math.random() * arr.length)] : '');
+
+function timeOfDay(d = new Date()) {
+  const h = d.getHours();
+  if (h < 6) return '凌晨';
+  if (h < 9) return '早上';
+  if (h < 12) return '上午';
+  if (h < 14) return '中午';
+  if (h < 18) return '下午';
+  if (h < 22) return '晚上';
+  return '深夜';
+}
 
 const args = new Set(process.argv.slice(2));
 const FORCE = args.has('--force');
@@ -90,7 +114,7 @@ function pickTargetToday(now, limits) {
   return d.getTime();
 }
 
-async function generatePost(cfg) {
+async function generatePost(cfg, life) {
   const creds = providerCreds(cfg.llm?.providerKey);
   if (!creds?.apiKey) throw new Error(`供应商 ${cfg.llm?.providerKey} 没有可用的 API Key`);
 
@@ -106,9 +130,14 @@ async function generatePost(cfg) {
     personaPrompt(cfg.persona),
     '',
     '现在你要在 QQ 空间发一条只属于自己的说说——不是回复任何人，是你自己的想法。',
-    `要求：${min}~${max} 字，口语，像随手打出来的；不写标题、不写话题标签、不用 emoji 表情符号；`,
+    `要求：${min}~${max} 字，口语，像随手打出来的；不写标题、不写话题标签；`,
     '不解释你在做什么，不写"今天也是元気的一天"这种模板句；可以有情绪、有判断、有具体的小细节。',
     '只说一件事，别铺陈。',
+    ...(life && life.lifeLine ? [`你现在的生活状态：${life.lifeLine}（可以当作写这条说说的由头，但别写成流水账）`] : []),
+    `现在是${life ? life.time : timeOfDay()}。`,
+    life && life.useEmoji
+      ? `可以带一个表情符号（最多一个，从这些里选：${life.emoji || '🙃'}）。`
+      : '不用 emoji 表情符号。',
   ].join('\n');
 
   const res = await fetch(`${creds.baseURL}/chat/completions`, {
@@ -120,7 +149,7 @@ async function generatePost(cfg) {
         { role: 'system', content: system },
         { role: 'user', content: `现在是 ${stamp}。可以想想：${seed}。直接写出说说正文。` },
       ],
-      temperature: 1.0,
+      temperature: 0.95 + Math.random() * 0.15,
       // deepseek-flash 是带推理的模型：思考过程会占用输出预算，
       // 上限给小了会导致 content 为空（reasoning 把 token 吃光）。
       max_tokens: 1600,
@@ -154,6 +183,23 @@ function callOneBot(url, action, params, timeoutMs = 20000) {
     };
     ws.onerror = () => { clearTimeout(timer); reject(new Error(`连不上 OneBot：${url}`)); };
   });
+}
+
+/** 按 config/qzone-life.json 的 images 段挑一张配图（没有就返回空数组） */
+function pickImages(life) {
+  const img = (life && life.images) || {};
+  if (img.enabled !== true) return [];
+  if (Math.random() >= Number(img.chance ?? 0.5)) return [];
+  const dir = path.resolve(REPO, img.dir || 'refs/qzone');
+  try {
+    const files = fs.readdirSync(dir)
+      .filter((f) => /\.(jpe?g|png|webp|gif)$/i.test(f))
+      .map((f) => path.join(dir, f));
+    if (!files.length) { log(`配图目录里没有图片：${dir}`); return []; }
+    return [pathToFileURL(pick(files)).href];
+  } catch {
+    return [];
+  }
 }
 
 async function main() {
@@ -211,8 +257,19 @@ async function main() {
   }
 
   log('开始生成说说…');
-  const text = await generatePost(cfg);
+  const shared = loadLife();
+  const emo = shared.emoticons || {};
+  const useEmoji = emo.enabled !== false && Math.random() < Number(emo.chance ?? 0.3);
+  const life = {
+    lifeLine: pick(shared.life),
+    time: timeOfDay(),
+    useEmoji,
+    emoji: useEmoji ? pick(emo.list || ['🙃']) : '',
+  };
+  const text = await generatePost(cfg, life);
+  const images = pickImages(shared);
   log(`内容（${text.length} 字）：${text}`);
+  if (images.length) log(`附带图片：${images[0]}`);
   if (DRY) { log('--dry，不发送'); return; }
 
   const url = cfg.napcat?.url ?? 'ws://127.0.0.1:3001';
@@ -224,6 +281,7 @@ async function main() {
     try {
       const r = await callOneBot(url, 'send_qzone_msg', {
         content: text,
+        ...(images.length ? { images } : {}),
         ugc_right: Number(cfg.target?.ugcRight ?? 1),
       }, 60000);
       log(`已发 QQ 空间，tid=${r?.tid ?? '?'}`);

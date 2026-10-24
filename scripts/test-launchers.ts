@@ -1,6 +1,9 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {spawnSync,execFileSync} from 'node:child_process';
 const files=['start.bat','start-mock.bat','test.bat'];const windows=process.platform==='win32';
+// Windows 上要显式用系统自带的 bsdtar：Git Bash 的 PATH 里 GNU tar 会把 "D:\..." 当成
+// "主机:路径"，直接报 "Cannot connect to D:"。
+const tarBin=windows&&fs.existsSync(path.join(process.env.SystemRoot??'C:\\Windows','System32','tar.exe'))?path.join(process.env.SystemRoot??'C:\\Windows','System32','tar.exe'):'tar';
 function fixture(name:string,lock=true){const root=fs.mkdtempSync(path.join(os.tmpdir(),'qq launcher '));const cwd=path.join(root,'project with spaces & chars');fs.mkdirSync(cwd);const bin=path.join(root,'tools with spaces');fs.mkdirSync(bin);const calls=path.join(root,'calls.txt');for(const file of files)fs.copyFileSync(file,path.join(cwd,file));if(lock)fs.writeFileSync(path.join(cwd,'package-lock.json'),'{}');
 const script=`@echo off
 setlocal
@@ -40,4 +43,4 @@ test('安装失败立即停止，不继续启动或测试',{skip:!windows},()=>{
 test('运行失败保留退出码',{skip:!windows},()=>{for(const file of files){const f=fixture(file);try{const r=f.run(file,{FAKE_RUN_EXIT:'42'});assert.equal(r.status,42);}finally{f.close();}}});
 const gitAvailable=spawnSync('git',['--version'],{encoding:'utf8'}).status===0;
 test('模拟GitHub源码导出：autocrlf开启后Git存储/归档/解压仍可执行',{skip:!windows||!gitAvailable},()=>{const f=fixture('start.bat');try{fs.copyFileSync('.gitattributes',path.join(f.cwd,'.gitattributes'));const git=(...args:string[])=>execFileSync('git',['-c','safe.directory='+f.cwd,'-c','core.autocrlf=true','-c','user.name=Launcher Test','-c','user.email=launcher@example.invalid',...args],{cwd:f.cwd,windowsHide:true,stdio:'pipe'});git('init','-b','main');git('add','.gitattributes',...files);git('commit','-m','launcher archive regression');for(const file of files){const blob=git('show','HEAD:'+file);assert.deepEqual(blob,fs.readFileSync(file));}
-const archive=path.join(f.root,'source.tar');git('archive','--format=tar','--output='+archive,'HEAD');const unpack=path.join(f.cwd,'download zip extracted');fs.mkdirSync(unpack);execFileSync('tar',['-xf',archive,'-C',unpack],{windowsHide:true});for(const file of files)assert.deepEqual(fs.readFileSync(path.join(unpack,file)),fs.readFileSync(file));const r=f.run('"download zip extracted\\start.bat"');assert.equal(r.status,0,r.stdout+r.stderr);assert.equal(r.stderr.trim(),'');assert.deepEqual(f.commands(),['install --no-fund --no-audit','run start']);}finally{f.close();}});
+const archive=path.join(f.root,'source.tar');git('archive','--format=tar','--output='+archive,'HEAD');const unpack=path.join(f.cwd,'download zip extracted');fs.mkdirSync(unpack);execFileSync(tarBin,['-xf',archive,'-C',unpack],{windowsHide:true});for(const file of files)assert.deepEqual(fs.readFileSync(path.join(unpack,file)),fs.readFileSync(file));const r=f.run('"download zip extracted\\start.bat"');assert.equal(r.status,0,r.stdout+r.stderr);assert.equal(r.stderr.trim(),'');assert.deepEqual(f.commands(),['install --no-fund --no-audit','run start']);}finally{f.close();}});

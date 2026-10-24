@@ -13,6 +13,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 let cached: string | null = null;
+let cachedPath: string | null = null;
+let cachedMtime = 0;
 
 function candidatePaths(): string[] {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -34,18 +36,22 @@ function candidatePaths(): string[] {
 }
 
 export function getPanelHtml(): string {
-  if (cached) return cached;
-
   for (const p of candidatePaths()) {
     try {
-      if (fs.existsSync(p)) {
-        cached = fs.readFileSync(p, 'utf8');
-        return cached;
-      }
+      if (!fs.existsSync(p)) continue;
+      // 按 mtime 缓存：改了 panel.html 刷新页面就生效，不必重启 Agent
+      const mtime = fs.statSync(p).mtimeMs;
+      if (cached && cachedPath === p && mtime === cachedMtime) return cached;
+      cached = fs.readFileSync(p, 'utf8');
+      cachedPath = p;
+      cachedMtime = mtime;
+      return cached;
     } catch {
       /* 尝试下一个路径 */
     }
   }
+  // 曾经读到过就用缓存顶着（文件临时读取失败时页面不至于变白）
+  if (cached) return cached;
 
   // 极端情况下的兜底：返回可读的错误页而不是崩溃
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>面板加载失败</title></head>

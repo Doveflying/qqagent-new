@@ -47,6 +47,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { BackgroundQueue } from './background.js';
 import { ShortMessageBuffer } from './coalesce.js';
 import { isQuietHour } from '../persona/trigger.js';
+import { proactiveForScope } from '../config/groups.js';
 import { auxiliary, modulatedEmotion, type AuxiliaryFailure } from './auxiliary.js';
 import { resolveImages, fitImagesToBudget } from './images.js';
 import {captureReplyWindow, messageLinks} from './window.js';
@@ -334,7 +335,9 @@ export class ReplyPipeline {
       if (!gate.allowed || !this.cfg.proactive.enabled || this.cfg.proactive.mode === 'off') {
         return Promise.resolve({ replied: false, reason: gate.reason ?? '主动发言已关闭' });
       }
-      const last = this.store.getLastProactive(scope); const c = this.cfg.proactive;
+      const last = this.store.getLastProactive(scope);
+      // 执行前复核也要用群级覆盖后的配置，否则面板刚关掉的群还会插一句
+      const c = proactiveForScope(scope, this.cfg.proactive);
       const repliedWhileQueued = this.store.db.prepare("SELECT id FROM messages WHERE conversation_id=? AND role='assistant' AND id>? LIMIT 1")
         .get(turn.conversationId, turn.historyCutoffId);
       // Ordinary new messages are included by captureReplyWindow at execution. A reply already
@@ -436,6 +439,21 @@ export class ReplyPipeline {
         });
       const [analyzedEmotion, mem] = await Promise.all([emotionRequest, memoryRequest]);
       this.assertTurn(turn);
+      // 记录本轮召回了哪些记忆、各自从哪条路命中。纯诊断，失败不能影响回复。
+      try {
+        this.store.logRecall({
+          scope,
+          conversationId: turn.conversationId,
+          userId,
+          turnId: turn.id,
+          query: mem.stats.query,
+          items: mem.items,
+          summaries: mem.summaries,
+          stats: mem.stats,
+        });
+      } catch (e) {
+        this.log.debug({ ...errorDetails(e) }, '召回记录写入失败');
+      }
       if (turn.config.emotion.enabled && text.trim()) {
         emotion = analyzedEmotion;
         this.assertTurn(turn);
@@ -1120,7 +1138,7 @@ export class ReplyPipeline {
       if (turn.config.memory.factExtraction && this.extractor) {
         const recent = this.store.getRecentMessages(scope, 20, false, turn.conversationId, assistantMsgId)
           .filter(m => m.id <= turn.historyCutoffId || m.role === 'assistant' && m.id > turn.historyCutoffId);
-        await this.extractor.extractAndStore(recent, scope, userId, turn.signal);
+        await this.extractor.extractAndStore(recent, scope, userId, turn.signal, turn.config.memory.factReview ? 'pending' : 'confirmed');
       }
 
       // ---- 压缩 ----

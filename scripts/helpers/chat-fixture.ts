@@ -5,6 +5,7 @@ import type { AppConfig, ChatMessage, InboundMessage, LlmRoleName } from '../../
 import { ProviderManager } from '../../src/llm/manager.js';
 import { MemoryStore } from '../../src/memory/store.js';
 import type { MemoryRetriever } from '../../src/memory/retriever.js';
+import { MemoryRetriever as RealRetriever } from '../../src/memory/retriever.js';
 import { ContextBuilder } from '../../src/context/compressor.js';
 import { PersonaManager } from '../../src/persona/manager.js';
 import { TriggerPolicy } from '../../src/persona/trigger.js';
@@ -26,6 +27,14 @@ export interface Scenario {
   expectedModel?: string;
   expectedImages?: number;
   expectVisionNote?: boolean;
+  /** 用真实的 MemoryRetriever（默认是返回空结果的桩），配合 facts/history 做 prompt 级回放 */
+  realRetriever?: boolean;
+  /** 预置长期事实，用于验证记忆是否真的进了 prompt */
+  facts?: Array<{ content: string; factType?: string; shareable?: boolean }>;
+  /** 预置历史消息（按顺序），用于验证窗口截断 */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** 覆盖人格设定文本 */
+  personaPrompt?: string;
 }
 
 export const scenarios: Scenario[] = [
@@ -85,10 +94,25 @@ export function makeFixture(scenario: Scenario, scope: string) {
     };
   };
   const store = new MemoryStore(':memory:');
-  const persona = PersonaSchema.parse({ id: 'test', name: '测试', systemPrompt: '测试人格' });
-  const retriever = {
-    retrieveMerged: async () => ({ facts: [], summaries: [], hitIds: [], stats: { localFacts: 0, sharedFacts: 0, summaries: 0, query: '' } }),
-  } as unknown as MemoryRetriever;
+  const persona = PersonaSchema.parse({ id: 'test', name: '测试', systemPrompt: scenario.personaPrompt ?? '测试人格' });
+  // 预置数据：prompt 级回放要靠它们验证「记忆和历史有没有正确进 prompt」
+  for (const fact of scenario.facts ?? []) {
+    store.addFact({
+      userId: 1,
+      scope,
+      factType: fact.factType ?? 'preference',
+      content: fact.content,
+      shareable: fact.shareable,
+    });
+  }
+  for (const h of scenario.history ?? []) {
+    store.addMessage({ scope, userId: h.role === 'user' ? 1 : 0, role: h.role, content: h.content });
+  }
+  const retriever = scenario.realRetriever
+    ? (new RealRetriever(store, cfg.memory, log) as unknown as MemoryRetriever)
+    : ({
+        retrieveMerged: async () => ({ facts: [], summaries: [], hitIds: [], stats: { localFacts: 0, sharedFacts: 0, summaries: 0, query: '' } }),
+      } as unknown as MemoryRetriever);
   const pipeline = new ReplyPipeline(
     cfg, store, providers, new PersonaManager([persona], cfg, store, log),
     new TriggerPolicy(cfg.trigger, log), new EmotionAnalyzer('rule', null, '', '', log),

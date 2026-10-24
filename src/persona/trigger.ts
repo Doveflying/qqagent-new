@@ -6,6 +6,7 @@
  */
 import type { Logger } from '../core/logger.js';
 import type { AppConfig, InboundMessage } from '../core/types.js';
+import { loadGroupOverrides, mergedGroupTrigger, type GroupOverrides } from '../config/groups.js';
 
 export type TriggerDecision =
   | { reply: true; reason: string; /** 清洗后用于生成的消息文本 */ text: string; direct: boolean }
@@ -23,6 +24,8 @@ export class TriggerPolicy {
   constructor(
     private readonly cfg: AppConfig['trigger'],
     _log: Logger,
+    /** 群级覆盖（config/groups.json）。默认按 mtime 缓存读取，面板改完即时生效。 */
+    private readonly overrides: () => GroupOverrides = loadGroupOverrides,
   ) {}
 
   private getState(scope: string): CooldownState {
@@ -161,7 +164,9 @@ export class TriggerPolicy {
   }
 
   private decideGroup(msg: InboundMessage, text: string): TriggerDecision {
-    const g = this.cfg.group;
+    // 群级覆盖：这个群想放宽/收紧触发条件时，只覆盖出现的那几个字段
+    const ov = msg.groupId !== undefined ? this.overrides()[String(msg.groupId)] : undefined;
+    const g = mergedGroupTrigger(this.cfg.group, ov);
 
     // 群白名单（非空时生效）
     if (g.enabledGroups.length > 0 && msg.groupId !== undefined && !g.enabledGroups.includes(msg.groupId)) {

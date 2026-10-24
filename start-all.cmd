@@ -46,6 +46,17 @@ call "scripts\ensure-napcat.cmd"
 start "" /min cmd /c "scripts\voice-proxy.cmd"
 start "" /min cmd /c "scripts\model-schedule-loop.cmd"
 start "" /min cmd /c "scripts\open-panel.cmd"
+REM ---- rebuild when src is newer than dist ----
+REM start-all prefers the compiled dist, so a src change that was never built
+REM serves stale code: the panel HTML is read per request, but API routes are
+REM registered at startup, so new routes 404 while the new page still renders.
+set "NEEDBUILD="
+if not exist "dist\src\index.js" set "NEEDBUILD=1"
+if exist "dist\src\index.js" (
+  node "scripts\needs-build.mjs" >nul 2>&1
+  if errorlevel 1 set "NEEDBUILD=1"
+)
+if defined NEEDBUILD call "scripts\ensure-build.cmd"
 
 REM Agent in the foreground; this window is the agent console.
 REM Prefer the compiled output: it starts faster and does not depend on the

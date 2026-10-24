@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# 只更新代码：解包（跳过 data）-> 编译 -> 重启
+# 只更新代码：解包（跳过 data 和 config）-> 编译 -> 重启
+#
+# 为什么不覆盖 config：线上配置会和本机分叉（云端 TTS 音色、管理员、server 段）。
+# 代码更新顺手把 config 写回去会静默改掉线上行为，所以排除；要同步配置走 02-agent.sh。
 set -e
 DIR=/opt/qqagent
 
-tar xzf /root/qqagent-deploy.tar.gz -C "$DIR" --exclude='./data/*'
+tar xzf /root/qqagent-deploy.tar.gz -C "$DIR" --exclude='./data/*' --exclude='./config/*'
 chown -R qqagent:qqagent "$DIR"
 
 echo "=== 编译 ==="

@@ -1,0 +1,12 @@
+{
+  "currency": "CNY",
+  "unit": 1000000,
+  "pricing": {
+    "deepseek/deepseek-chat": { "input": 2, "output": 8 },
+    "deepseek/deepseek-reasoner": { "input": 4, "output": 16 },
+    "zhipu/glm-4-flash": { "input": 0, "output": 0 },
+    "*": { "input": 2, "output": 8 }
+  },
+  "budget": { "daily": 2, "monthly": 30, "alertRatio": 0.8 },
+  "note": "单价单位：currency / unit 个 token。键可以写 provider/model、model 或 *（兜底）。这里算的是估算值，中转站加价、缓存命中、阶梯价都算不出来。"
+}

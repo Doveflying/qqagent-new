@@ -19,8 +19,12 @@ test('统计落库并可从新管理器恢复，包含用途与失败',()=>{
  const f=makeFixture({name:'usage',expectedProvider:'default'},'private:1');
  try {
   const manager:any=Object.create(ProviderManager.prototype);manager.usage=new Map();manager.attachUsageStore(f.store.db);
-  manager.recordUsage('p','m',{latencyMs:20,usage:{promptTokens:5,completionTokens:3}},'facts',1);manager.metric('p','m','facts',false,10,2);
+  manager.recordUsage('p','m',{latencyMs:20,usage:{promptTokens:5,completionTokens:3}},'facts',1);
+  manager.metric({provider:'p',model:'m',purpose:'facts',success:false,latencyMs:10,retry:2,error:'HTTP 429 rate limit',errorKind:'rate_limit',chainId:'c1'});
   const restored:any=Object.create(ProviderManager.prototype);restored.usage=new Map();restored.attachUsageStore(f.store.db);assert.equal(restored.getUsage()[0].promptTokens,5);
   assert.equal((f.store.db.prepare('SELECT COUNT(*) AS n FROM llm_calls').get() as any).n,2);
+  // 失败行要带上分类和调用链，否则调用诊断面板什么都看不到
+  const failed=(f.store.db.prepare("SELECT purpose,error_kind,chain_id,error FROM llm_calls WHERE success=0").get() as any);
+  assert.equal(failed.purpose,'facts');assert.equal(failed.error_kind,'rate_limit');assert.equal(failed.chain_id,'c1');assert.match(failed.error,/429/);
  }finally{f.store.close();}
 });

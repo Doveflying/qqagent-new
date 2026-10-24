@@ -12,7 +12,7 @@ import { errorDetails } from '../core/logger.js';
  */
 import type { Logger } from '../core/logger.js';
 import type { AppConfig } from '../core/types.js';
-import type { FactRow, MemoryStore } from './store.js';
+import type { FactRow, MemoryStore, RecallItemRow } from './store.js';
 import type { SemanticIndex } from './semantic.js';
 
 export interface RetrievalResult {
@@ -22,6 +22,8 @@ export interface RetrievalResult {
   summaries: string[];
   /** 命中的事实行（用于更新 hit_count） */
   hitIds: number[];
+  /** 每条被选中记忆的来源与分数，面板「召回记录」靠它解释「为什么用了这条」 */
+  items: RecallItemRow[];
   /** 检索统计，便于调试 */
   stats: {
     localFacts: number;
@@ -30,6 +32,8 @@ export interface RetrievalResult {
     query: string;
     /** 语义检索额外补入的条数 */
     semanticHits?: number;
+    /** 这一轮走的是关键词还是关键词+语义 */
+    mode?: 'keyword' | 'merged' | 'fallback';
   };
 }
 
@@ -85,26 +89,34 @@ export class MemoryRetriever {
 
     const factTexts: string[] = [];
     const hitIds: number[] = [];
+    const items: RecallItemRow[] = [];
     let localCount = 0;
     let sharedCount = 0;
+    let strategy: 'keyword' | 'fallback' = 'keyword';
 
     if (queryTerms) {
       const selected = this.store.searchFacts(userId,queryTerms,{scope,sharing:mode,shareableOnly:mode==='identity-facts',limit,halfLifeDays:this.cfg.retrieval.timeDecayHalfLifeDays});
-      for (const f of selected) { factTexts.push(f.content); hitIds.push(f.id); if (f.scope===scope) localCount++; else sharedCount++; }
+      for (const f of selected) {
+        factTexts.push(f.content);
+        hitIds.push(f.id);
+        if (f.scope===scope) localCount++; else sharedCount++;
+        items.push({ id: f.id, content: f.content, source: 'keyword', score: f.score, scope: f.scope, factType: f.fact_type, confidence: f.confidence });
+      }
     }
 
     // 3) 无查询词时，取置信度最高的长期事实兜底
     if (factTexts.length === 0) {
+      strategy = 'fallback';
       const top = this.store.getFactsByUser(userId, {
         scope,
-        shareableOnly: mode === 'identity-facts',
-        sharing: mode,
+        shareableOnly: this.cfg.retrieval.crossScopeSharing === 'identity-facts',
+        sharing: this.cfg.retrieval.crossScopeSharing,
         limit: 8,
       });
       for (const f of top) {
-
         factTexts.push(f.content);
         hitIds.push(f.id);
+        items.push({ id: f.id, content: f.content, source: 'fallback', score: f.confidence, scope: f.scope, factType: f.fact_type, confidence: f.confidence });
       }
       localCount = factTexts.length;
     }
@@ -126,11 +138,15 @@ export class MemoryRetriever {
       '记忆检索完成',
     );
 
+    // items 与 facts 保持同源同序：面板看到的「用了哪些记忆」就是真正塞进 prompt 的那些
+    const finalItems = dedupeItems(items).slice(0, limit);
+
     return {
-      facts: dedupe(factTexts).slice(0, limit),
+      facts: finalItems.map((i) => i.content),
       summaries,
       hitIds,
-      stats: { localFacts: localCount, sharedFacts: sharedCount, summaries: summaries.length, query: queryTerms },
+      items: finalItems,
+      stats: { localFacts: localCount, sharedFacts: sharedCount, summaries: summaries.length, query: queryTerms, mode: strategy },
     };
   }
 
@@ -162,13 +178,42 @@ export class MemoryRetriever {
 
       if (hits.length === 0) return base;
 
+      const semIds = new Set(hits.map((h) => h.id));
+      const baseById = new Map(base.items.map((i) => [i.id, i]));
+      const metaStmt = this.store.db.prepare('SELECT scope, fact_type, confidence FROM memory_facts WHERE id=?');
+      const meta = (id: number) => metaStmt.get(id) as { scope: string; fact_type: string; confidence: number } | undefined;
+
       const ranks = new Map<number, { content: string; score: number }>();
       base.hitIds.forEach((id, rank) => { const row = this.store.db.prepare('SELECT content FROM memory_facts WHERE id=?').get(id) as { content: string } | undefined; if (row) ranks.set(id, { content: row.content, score: 1 / (60 + rank + 1) }); });
       hits.forEach((hit, rank) => { const existing = ranks.get(hit.id); ranks.set(hit.id, { content: hit.content, score: (existing?.score ?? 0) + 1 / (60 + rank + 1) }); });
       const selected = [...ranks].sort((a,b) => b[1].score-a[1].score || a[0]-b[0]).slice(0,limit);
       const hitIds = selected.map(([id]) => id);
       this.store.markFactsHit(hitIds.filter(id => !base.hitIds.includes(id)));
-      return { ...base, facts: dedupe(selected.map(([,row]) => row.content)), hitIds, stats: { ...base.stats, semanticHits: hitIds.filter(id => !base.hitIds.includes(id)).length } };
+
+      // 标出每条记忆是从哪一路来的：两路都中 > 只有语义 > 只有关键词
+      const items: RecallItemRow[] = selected.map(([id, row]) => {
+        const b = baseById.get(id);
+        const m = meta(id);
+        const inSemantic = semIds.has(id);
+        const source = b && inSemantic ? 'both' : inSemantic ? 'semantic' : b?.source ?? 'keyword';
+        return {
+          id,
+          content: row.content,
+          source,
+          score: row.score,
+          scope: b?.scope ?? m?.scope ?? '',
+          factType: b?.factType ?? m?.fact_type ?? '',
+          confidence: b?.confidence ?? m?.confidence ?? 0,
+        };
+      });
+
+      return {
+        ...base,
+        facts: items.map((i) => i.content),
+        items,
+        hitIds,
+        stats: { ...base.stats, semanticHits: hitIds.filter(id => !base.hitIds.includes(id)).length, mode: 'merged' },
+      };
     } catch (e) {
       this.log.debug({ ...errorDetails(e), err: (e as Error).message }, '语义检索失败，使用关键词结果');
       return base;
@@ -206,6 +251,13 @@ export class MemoryRetriever {
   }
 }
 
-function dedupe(arr: string[]): string[] {
-  return [...new Set(arr)];
+function dedupeItems(items: RecallItemRow[]): RecallItemRow[] {
+  const seen = new Set<string>();
+  const out: RecallItemRow[] = [];
+  for (const item of items) {
+    if (seen.has(item.content)) continue;
+    seen.add(item.content);
+    out.push(item);
+  }
+  return out;
 }

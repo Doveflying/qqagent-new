@@ -20,7 +20,10 @@ param(
     [int]$QrTimeoutSec = 120,
     [int]$LoginTimeoutSec = 180,
     # 自动结束已存在的 QQ 进程再重启。启动器会传这个参数，单独运行默认不带，避免误杀。
-    [switch]$KillQQ
+    [switch]$KillQQ,
+    # 不调用 Start-Process 在本机弹出图片窗口。面板触发时用：
+    # 二维码由管理面板（/api/login/qr）直接展示，可以在别的设备上扫。
+    [switch]$NoOpen
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,8 +128,13 @@ while ((Get-Date) -lt $deadline) {
     }
 }
 if ($qrReady) {
-    Start-Process $qrFile
-    Write-Step "二维码已弹出，请用手机 QQ 扫码登录机器人账号。"
+    if ($NoOpen) {
+        Write-Step "二维码已生成：$qrFile"
+        Write-Step "（-NoOpen：不在本机弹窗，请在管理面板「扫码登录」页查看）"
+    } else {
+        Start-Process $qrFile
+        Write-Step "二维码已弹出，请用手机 QQ 扫码登录机器人账号。"
+    }
 } else {
     Write-Step "没等到新的二维码。请切到 NapCat 的窗口看看有没有报错，或手动运行："
     Write-Step "  $launcher"

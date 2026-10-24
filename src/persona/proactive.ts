@@ -26,6 +26,7 @@ import type {RelevanceResult} from './relevance.js';
 import type { AppConfig } from '../core/types.js';
 import type { MemoryStore } from '../memory/store.js';
 import { isQuietHour } from '../persona/trigger.js';
+import { loadGroupOverrides, proactiveForScope, type GroupOverrides } from '../config/groups.js';
 
 export interface ProactiveContext {
   scope: string;
@@ -57,6 +58,8 @@ export class ProactiveSpeaker {
       resolvePersona: (scope: string, userId: number) => Persona;
       sharing: () => AppConfig['memory']['retrieval']['crossScopeSharing'];
     },
+    /** 群级覆盖（config/groups.json）；私聊不适用 */
+    private readonly overrides: () => GroupOverrides = loadGroupOverrides,
   ) {}
 
   /**
@@ -66,7 +69,8 @@ export class ProactiveSpeaker {
    * 因为「每几句消息」需要精确的消息计数。
    */
   decide(ctx: ProactiveContext): ProactiveDecision {
-    const c = this.cfg;
+    // 群级覆盖：这个群可以单独调频率、关掉主动发言、或设自己的免打扰时段
+    const c = proactiveForScope(ctx.scope, this.cfg, this.overrides);
     if (!c.enabled || c.mode === 'off') {
       return { speak: false, reason: '主动发言已关闭' };
     }
@@ -74,6 +78,11 @@ export class ProactiveSpeaker {
     // 只对群聊主动发言；私聊本来就 always 回复
     if (ctx.scopeType === 'private') {
       return { speak: false, reason: '私聊不走主动发言' };
+    }
+
+    // 「对谁主动」：targets 非空时只在这些会话里生效（群白名单）
+    if (c.targets.length > 0 && !c.targets.includes(ctx.scope)) {
+      return { speak: false, reason: '该会话不在主动发言白名单（proactive.targets）' };
     }
 
     if (isQuietHour(c.quietHours)) {

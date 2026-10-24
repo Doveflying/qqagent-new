@@ -45,7 +45,7 @@
     "test:context-budget": "tsx scripts/test-context-budget.ts",
     "test:summary-strategies": "tsx scripts/test-summary-strategies.ts",
     "test:optimizations-next": "npm run test:background && npm run test:reply-strategy && npm run test:addressing && npm run test:auxiliary && npm run test:media && npm run test:vision-description && npm run test:image-history && npm run test:sticker-candidates && npm run test:context-budget && npm run test:summary-strategies",
-    "test:optimizations-final": "tsx scripts/test-memory-index.ts && tsx scripts/test-memory-retrieval.ts && tsx scripts/test-fact-lifecycle.ts && tsx scripts/test-config-atomic.ts && tsx scripts/test-database-maintenance.ts && tsx scripts/test-operations.ts && npm run test:command-permissions && npm run test:persona-context && npm run test:proactive-relevance && npm run test:reply-window && npm run test:launchers && npm run test:forward-messages && npm run test:speech && npm run test:scheduled-tasks && npm run test:links-cards",
+    "test:optimizations-final": "tsx scripts/test-memory-index.ts && tsx scripts/test-memory-retrieval.ts && tsx scripts/test-fact-lifecycle.ts && tsx scripts/test-config-atomic.ts && tsx scripts/test-database-maintenance.ts && tsx scripts/test-operations.ts && npm run test:command-permissions && npm run test:persona-context && npm run test:proactive-relevance && npm run test:reply-window && npm run test:launchers && npm run test:forward-messages && npm run test:speech && npm run test:scheduled-tasks && npm run test:links-cards && npm run test:health-center && npm run test:llm-diagnostics && npm run test:memory-review && npm run test:qzone-logic && npm run test:group-config && npm run test:usage-report && npm run test:prompt-replay",
     "test:replay": "tsx scripts/test-agent-replay.ts",
     "test:isolated": "npm run test:stage1 && npm run test:panel-isolated",
     "test:panel-isolated": "tsx scripts/test-panel-isolated.ts",
@@ -59,7 +59,15 @@
     "test:scheduled-tasks": "tsx scripts/test-scheduled-tasks.ts",
     "test:links-cards": "tsx scripts/test-links-cards.ts",
     "test:logging": "tsx scripts/test-logging.ts",
-    "test:token-budgets": "tsx scripts/test-token-budgets.ts"
+    "test:token-budgets": "tsx scripts/test-token-budgets.ts",
+    "test:health-center": "tsx scripts/test-health-center.ts",
+    "test:llm-diagnostics": "tsx scripts/test-llm-diagnostics.ts",
+    "test:memory-review": "tsx scripts/test-memory-review.ts",
+    "test:qzone-logic": "node scripts/test-qzone-logic.mjs",
+    "test:group-config": "tsx scripts/test-group-config.ts",
+    "test:usage-report": "tsx scripts/test-usage-report.ts",
+    "test:prompt-replay": "tsx scripts/test-prompt-replay.ts",
+    "check:login": "npm run build && node dist/scripts/check-login-service.js && node dist/scripts/check-login-routes.js && node dist/scripts/check-login-spawn.js"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

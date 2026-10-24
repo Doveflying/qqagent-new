@@ -89,6 +89,33 @@ export interface FactRow {
   last_hit_at: number | null;
   created_at: number;
   updated_at: number;
+  /** confirmed | pending | rejected（老库迁移后默认 confirmed） */
+  review_state?: string;
+}
+
+/** 一次召回里被选中的单条记忆，带命中来源，用于面板解释 */
+export interface RecallItemRow {
+  id: number;
+  content: string;
+  /** keyword = 关键词命中；semantic = 语义命中；both = 两路都中；fallback = 无查询词时的兜底 */
+  source: string;
+  score: number;
+  scope: string;
+  factType: string;
+  confidence: number;
+}
+
+export interface RecallRow {
+  id: number;
+  scope: string;
+  conversationId: string;
+  userId: number;
+  turnId: string;
+  query: string;
+  createdAt: number;
+  items: RecallItemRow[];
+  summaries: string[];
+  stats: Record<string, unknown>;
 }
 
 export interface SummaryRow {
@@ -142,6 +169,8 @@ export interface FactInput {
   shareable?: boolean;
   sourceMsgId?: number;
   replacesId?: number;
+  /** 默认 confirmed；pending 表示先进待确认区，不参与检索 */
+  reviewState?: 'confirmed' | 'pending' | 'rejected';
 }
 
 /** 粗略估算 token 数（中文约 1.5 字/token，英文约 4 字符/token） */
@@ -650,8 +679,8 @@ export class MemoryStore {
     const info = this.db
       .prepare(
         `INSERT INTO memory_facts(
-           user_id, scope, fact_type, content, keywords, confidence, shareable, source_msg_id, created_at, updated_at
-         ) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+           user_id, scope, fact_type, content, keywords, confidence, shareable, source_msg_id, created_at, updated_at, review_state
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         input.userId,
@@ -664,6 +693,7 @@ export class MemoryStore {
         input.sourceMsgId ?? null,
         now,
         now,
+        input.reviewState ?? 'confirmed',
       );
     if (input.replacesId) {
       this.db.prepare('UPDATE memory_facts SET active=0,updated_at=? WHERE id=?').run(now,input.replacesId);
@@ -682,10 +712,104 @@ export class MemoryStore {
     return rows.find(row => normalizeFact(row.content) === normalizeFact(content));
   }
 
-  getFactsByUser(userId: number, opts: { scope?: string; shareableOnly?: boolean; sharing?: 'none' | 'identity-facts' | 'full'; limit?: number } = {}): FactRow[] {
+  /** 待确认的事实：抽取器写进来但还没被人工确认的「建议」，不参与检索 */
+  listPendingFacts(opts: { userId?: number; scope?: string; limit?: number } = {}): FactRow[] {
+    const limit = opts.limit ?? 200;
+    const conds = ['active = 1', "review_state = 'pending'"];
+    const params: Array<string | number> = [];
+    if (opts.userId) {
+      conds.push('user_id = ?');
+      params.push(opts.userId);
+    }
+    if (opts.scope) {
+      conds.push('scope = ?');
+      params.push(opts.scope);
+    }
+    params.push(limit);
+    return this.db
+      .prepare(`SELECT * FROM memory_facts WHERE ${conds.join(' AND ')} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params) as unknown as FactRow[];
+  }
+
+  /**
+   * 确认或驳回一条事实。
+   * 驳回不删除记录（留痕，避免同一条被反复抽出来），只是永久不参与检索。
+   */
+  setFactReviewState(id: number, state: 'confirmed' | 'rejected'): FactRow | undefined {
+    const row = this.db.prepare('SELECT * FROM memory_facts WHERE id=? AND active=1').get(id) as unknown as FactRow | undefined;
+    if (!row) return undefined;
+    this.db.prepare('UPDATE memory_facts SET review_state=?, updated_at=? WHERE id=?').run(state, Date.now(), id);
+    if (state !== 'confirmed') this.deleteFactEmbedding(id);
+    this.notifyFactChange(row.user_id);
+    return { ...row, review_state: state } as FactRow;
+  }
+
+  /**
+   * 记录一次召回：这次回复用了哪些记忆、从哪来的。
+   * 纯诊断数据，不参与检索；只保留最近 7 天。
+   */
+  logRecall(input: {
+    scope: string;
+    conversationId?: string;
+    userId: number;
+    turnId?: string;
+    query: string;
+    items: unknown[];
+    summaries: string[];
+    stats: Record<string, unknown>;
+  }): number {
+    const now = Date.now();
+    const payload = JSON.stringify({ items: input.items, summaries: input.summaries, stats: input.stats });
+    const info = this.db
+      .prepare('INSERT INTO memory_recalls(scope,conversation_id,user_id,turn_id,query,payload,created_at) VALUES(?,?,?,?,?,?,?)')
+      .run(input.scope, input.conversationId ?? '', input.userId, input.turnId ?? '', input.query.slice(0, 200), payload, now);
+    // 每 50 次清一次旧数据，避免这张诊断表无限增长
+    if (this.recallWrites++ % 50 === 0) {
+      this.db.prepare('DELETE FROM memory_recalls WHERE created_at < ?').run(now - 7 * 86400000);
+    }
+    return Number(info.lastInsertRowid);
+  }
+  private recallWrites = 0;
+
+  /** 最近的召回记录（含完整明细），供面板「记忆 → 召回记录」展示 */
+  listRecalls(opts: { scope?: string; limit?: number } = {}): RecallRow[] {
+    const limit = opts.limit ?? 50;
+    const conds: string[] = [];
+    const params: Array<string | number> = [];
+    if (opts.scope) {
+      conds.push('scope = ?');
+      params.push(opts.scope);
+    }
+    params.push(limit);
+    const rows = this.db
+      .prepare(`SELECT * FROM memory_recalls ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params) as unknown as Array<Record<string, unknown>>;
+    return rows.map((r) => {
+      let payload: { items?: unknown; summaries?: unknown; stats?: unknown } = {};
+      try {
+        payload = JSON.parse(String(r.payload ?? '{}'));
+      } catch {
+        /* 坏数据当空 */
+      }
+      return {
+        id: Number(r.id),
+        scope: String(r.scope),
+        conversationId: String(r.conversation_id ?? ''),
+        userId: Number(r.user_id ?? 0),
+        turnId: String(r.turn_id ?? ''),
+        query: String(r.query ?? ''),
+        createdAt: Number(r.created_at),
+        items: Array.isArray(payload.items) ? (payload.items as RecallItemRow[]) : [],
+        summaries: Array.isArray(payload.summaries) ? (payload.summaries as string[]) : [],
+        stats: (payload.stats ?? {}) as Record<string, unknown>,
+      };
+    });
+  }
+
+  getFactsByUser(userId: number, opts: { scope?: string; shareableOnly?: boolean; sharing?: 'none' | 'identity-facts' | 'full'; limit?: number; reviewState?: string } = {}): FactRow[] {
     const limit = opts.limit ?? 100;
-    const conds = ['user_id = ?', 'active = 1'];
-    const params: Array<string | number> = [userId];
+    const conds = ['user_id = ?', 'active = 1', "review_state = ?"];
+    const params: Array<string | number> = [userId, opts.reviewState ?? 'confirmed'];
     if (opts.scope) {
       // 本会话的事实 + 可跨会话共享的事实
       if (opts.shareableOnly) {
@@ -717,7 +841,7 @@ export class MemoryStore {
 
     const terms = memoryTerms(query).slice(0, 15);
     if (!terms.length) return [];
-    const conditions = ['f.user_id = ?', 'f.active = 1']; const permission: Array<string | number> = [userId];
+    const conditions = ['f.user_id = ?', 'f.active = 1', "f.review_state = 'confirmed'"]; const permission: Array<string | number> = [userId];
     if (opts.scope) { conditions.push(opts.sharing === 'full' ? '(f.scope = ? OR f.private = 0)' : opts.shareableOnly ? '(f.scope = ? OR (f.shareable = 1 AND f.private = 0))' : 'f.scope = ?'); permission.push(opts.scope); }
     else if (opts.shareableOnly) conditions.push('f.shareable = 1 AND f.private = 0');
     const where = conditions.join(' AND ');
@@ -830,7 +954,7 @@ export class MemoryStore {
       .prepare(
         `SELECT f.*, e.vec AS _vec FROM memory_facts f
          JOIN fact_embeddings e ON e.fact_id = f.id
-         WHERE f.user_id = ? AND f.active = 1 AND e.source_content = f.content AND e.dim = ? ${opts.model ? 'AND e.model = ?' : ''}
+         WHERE f.user_id = ? AND f.active = 1 AND f.review_state = 'confirmed' AND e.source_content = f.content AND e.dim = ? ${opts.model ? 'AND e.model = ?' : ''}
          ${opts.scope ? (opts.sharing === 'full' ? 'AND (f.scope = ? OR f.private = 0)' : opts.shareableOnly ? 'AND (f.scope = ? OR (f.shareable = 1 AND f.private = 0))' : 'AND f.scope = ?') : (opts.shareableOnly ? 'AND f.shareable = 1 AND f.private = 0' : '')}
          ORDER BY f.updated_at DESC LIMIT 5000`,
       )

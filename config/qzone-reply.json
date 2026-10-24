@@ -1,32 +1,10 @@
 {
   "enabled": true,
   "persona": "shiori",
-  "llm": {
-    "providerKey": "deepseek",
-    "model": "deepseek-flash"
-  },
-  "napcat": {
-    "url": "ws://127.0.0.1:3001"
-  },
-  "watch": [
-    { "uin": 2731758714, "name": "黄昏" }
-  ],
-  "limits": {
-    "perDay": 2,
-    "minGapMinutes": 30,
-    "maxAgeDays": 2,
-    "scanPosts": 5
-  },
-  "replyComments": {
-    "enabled": true,
-    "watch": [2731758714],
-    "perDay": 3,
-    "minGapMinutes": 5,
-    "maxAgeHours": 24,
-    "scanPosts": 5
-  },
-  "style": {
-    "minChars": 3,
-    "maxChars": 30
-  }
+  "llm": { "providerKey": "deepseek", "model": "deepseek-flash" },
+  "napcat": { "url": "ws://127.0.0.1:3001" },
+  "watch": [],
+  "limits": { "perDay": 2, "minGapMinutes": 30, "maxAgeDays": 2, "scanPosts": 5 },
+  "replyComments": { "enabled": true, "watch": [], "perDay": 3, "minGapMinutes": 10, "maxAgeHours": 24, "scanPosts": 5 },
+  "style": { "minChars": 3, "maxChars": 30 }
 }
