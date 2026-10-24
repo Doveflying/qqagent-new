@@ -512,7 +512,11 @@ const BaseAppConfigSchema = z.object({
     timeoutMs:z.number().int().min(500).max(15000).default(6000),maxRedirects:z.number().int().min(0).max(5).default(3),
     cacheTtlMs:z.number().int().min(0).max(3600000).default(300000),allowedDomains:z.array(z.string().max(253)).max(100).default([]),denyDomains:z.array(z.string().max(253)).max(100).default([]),
   }).prefault({}),
-  tasks:z.object({remindersEnabled:z.boolean().default(true),dailyEnabled:z.boolean().default(false),dailyTimeoutMs:z.number().int().min(0).max(600000).refine(v=>v===0||v>=1000,'日报超时须为0或至少1000毫秒').default(0),maxPerUser:z.number().int().min(1).max(100).default(20),overdueGraceMs:z.number().int().min(1000).max(604800000).default(86400000)}).prefault({}),
+  tasks:z.object({remindersEnabled:z.boolean().default(true),dailyEnabled:z.boolean().default(false),dailyTimeoutMs:z.number().int().min(0).max(600000).refine(v=>v===0||v>=1000,'日报超时须为0或至少1000毫秒').default(0),maxPerUser:z.number().int().min(1).max(100).default(20),overdueGraceMs:z.number().int().min(1000).max(604800000).default(86400000),
+    /** 到点时用她自己的话重写提醒（关掉就发原始文本） */
+    reminderStyle:z.boolean().default(true),
+    /** 私聊提醒顺便用语音说一遍（需要 TTS 和人格音色都开着） */
+    reminderVoice:z.boolean().default(true)}).prefault({}),
   memory: MemorySchema.prefault({}),
   emotion: EmotionSchema.prefault({}),
   context: ContextSchema.prefault({}),

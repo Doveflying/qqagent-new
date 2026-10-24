@@ -50,6 +50,7 @@ config/stickers/manifest.json
 .codex/
 .dsh-lab/
 .workbuddy/
+.workbuddy-ai/
 .ssh/
 .piptest/
 .svc-env/

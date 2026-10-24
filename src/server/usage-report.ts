@@ -152,6 +152,7 @@ const PURPOSE_LABELS: Record<string, string> = {
   vision: '图片理解',
   title: '话题标题',
   persona: '人格生成',
+  reminder: '定时提醒',
 };
 
 export function purposeLabel(purpose: string): string {

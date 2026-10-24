@@ -347,3 +347,62 @@ test('慢日报失败的重试间隔从完成时间开始计算',async(t)=>{
   assert.equal(f.tasks.list()[0]!.updated_at,now+125000);
  }finally{f.store.close();}
 });
+
+// ---------------- 提醒文案：用她自己的话说 ----------------
+function styledFixture(opts: { style?: boolean; chatThrows?: boolean; reply?: string } = {}) {
+    const cfg = AppConfigSchema.parse({ tasks: { reminderStyle: opts.style ?? true } });
+    const store = new MemoryStore(':memory:');
+    const trigger = new TriggerPolicy(cfg.trigger, log);
+    let captured: Array<{ role: string; content: string }> | null = null;
+    const providers = {
+        resolveRole: () => ({ provider: 'fake', model: 'chat' }),
+        chat: async (messages: Array<{ role: string; content: string }>) => {
+            captured = messages;
+            if (opts.chatThrows) throw new Error('model down');
+            return { content: opts.reply ?? '「该交作业了。」' };
+        },
+    } as unknown as ProviderManager;
+    const personas = new PersonaManager([PersonaSchema.parse({ id: 'shiori', name: '志绪理', systemPrompt: '说话很短，偶尔毒舌' })], cfg, store, log);
+    const api = { sendToScope: async () => ({ message_id: 1 }) } as unknown as OneBotAction;
+    const tasks = new ScheduledTasks(cfg, store, providers, api, trigger, log, () => true, personas);
+    const task = tasks.createReminder('private:1', 1, '交作业', Date.now() + 1000);
+    return { tasks, task, store, captured: () => captured };
+}
+
+test('提醒到点用她自己的话说，提示词带上人格和原文', async () => {
+    const f = styledFixture();
+    try {
+        const text = await f.tasks.phraseReminder(f.task);
+        assert.equal(text, '该交作业了。', '要剥掉模型爱加的外层引号');
+        const messages = f.captured()!;
+        assert.match(messages[0]!.content, /说话很短，偶尔毒舌/, '人格设定必须进 system');
+        assert.match(messages[0]!.content, /别写成通知/, '要有反通知腔的约束');
+        assert.match(messages[1]!.content, /交作业/, '原文要带上');
+        assert.doesNotMatch(messages[1]!.content, /⏰/, '不该把旧的机器人前缀喂回去');
+    } finally { f.store.close(); }
+});
+
+test('模型挂了也要把提醒发出去：回退成原文', async () => {
+    const f = styledFixture({ chatThrows: true });
+    try {
+        const text = await f.tasks.phraseReminder(f.task);
+        assert.equal(text, '⏰ 提醒：交作业');
+    } finally { f.store.close(); }
+});
+
+test('关掉 reminderStyle 就完全不调模型', async () => {
+    const f = styledFixture({ style: false });
+    try {
+        const text = await f.tasks.phraseReminder(f.task);
+        assert.equal(text, '⏰ 提醒：交作业');
+        assert.equal(f.captured(), null, '不该产生额外调用');
+    } finally { f.store.close(); }
+});
+
+test('模型返回空内容时同样回退，不会发出空提醒', async () => {
+    const f = styledFixture({ reply: '   ' });
+    try {
+        const text = await f.tasks.phraseReminder(f.task);
+        assert.equal(text, '⏰ 提醒：交作业');
+    } finally { f.store.close(); }
+});

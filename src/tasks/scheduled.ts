@@ -7,6 +7,26 @@ import type { OneBotAction } from '../onebot/action.js';
 import { OneBotActionError } from '../onebot/action.js';
 import type { TriggerPolicy } from '../persona/trigger.js';
 import type { Logger } from '../core/logger.js';
+import type { PersonaManager } from '../persona/manager.js';
+import type { SpeechService } from '../llm/speech.js';
+import { personaDefinition } from '../persona/definition.js';
+import type { ChatMessage, InboundMessage } from '../core/types.js';
+
+/**
+ * 到点提醒时给模型的指令。
+ *
+ * 关键点：不要写成通知。原先是「⏰ 提醒：交作业」，一眼就是机器人；
+ * 现在让她按自己的口吻说一句，但**不许加戏**——提醒是功能，不是创作。
+ */
+export const REMINDER_INSTRUCTIONS = [
+  '现在到点了，你要去提醒对方一件事。',
+  '要求：',
+  '- 用你自己的说话方式说，但**必须让人一眼看出要做什么**：可以像「到点了，该吃药了」，不能只丢一个「药。」',
+  '- 一到两句完整的话，别写成通知或待办清单',
+  '- 直接说事。不要复述"你之前让我提醒你"这类流程话',
+  '- 不要编造原任务里没有的内容，也不要替对方安排下一步',
+  '- 不加标题、不加引号、不用列表，最多一个 emoji',
+].join('\n');
 export interface ScheduledTask {
     id: string;
     kind: 'reminder' | 'digest';
@@ -96,8 +116,63 @@ export class ScheduledTasks {
     private running?: Promise<void>;
     private stopped = false;
     private controller = new AbortController();
-    constructor(private cfg: AppConfig, private store: MemoryStore, private providers: ProviderManager, private api: OneBotAction, private trigger: TriggerPolicy, private log: Logger, private ready: () => boolean = () => true) { store.onClose(() => { this.stopped = true; this.controller.abort(); if (this.timer)
+    constructor(private cfg: AppConfig, private store: MemoryStore, private providers: ProviderManager, private api: OneBotAction, private trigger: TriggerPolicy, private log: Logger, private ready: () => boolean = () => true, private personaMgr?: PersonaManager, private speech?: SpeechService) { store.onClose(() => { this.stopped = true; this.controller.abort(); if (this.timer)
         clearInterval(this.timer); }); }
+
+    /**
+     * 把「提醒内容」交给模型，用她自己的语气说出来。
+     *
+     * 失败一律退回原始文本——**提醒不能因为模型抽风就不发**，
+     * 这是定时任务和聊天最大的区别：聊天可以沉默，提醒不能。
+     */
+    async phraseReminder(task: ScheduledTask, signal: AbortSignal = this.controller.signal): Promise<string> {
+        const fallback = '⏰ 提醒：' + task.text;
+        if (!this.cfg.tasks.reminderStyle || !this.personaMgr)
+            return fallback;
+        try {
+            const persona = this.personaMgr.resolve(task.scope, task.owner_id).persona;
+            const role = this.providers.resolveRole('chat', this.cfg.llm);
+            const setAt = new Date(task.created_at).toLocaleString('zh-CN', { timeZone: task.timezone, hour12: false });
+            const now = new Date().toLocaleString('zh-CN', { timeZone: task.timezone, hour12: false });
+            const messages: ChatMessage[] = [
+                { role: 'system', content: personaDefinition(persona) + '\n\n' + REMINDER_INSTRUCTIONS },
+                { role: 'user', content: `她之前答应提醒这件事：「${task.text}」\n约定时间：${setAt}\n现在：${now}` },
+            ];
+            const timeoutMs = 20000;
+            const result = await this.providers.chat(messages, role.provider, role.model || undefined, {
+                purpose: 'reminder', maxTokens: 200, timeoutMs,
+                signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
+            });
+            signal.throwIfAborted();
+            const text = String(result.content ?? '').trim().replace(/^[\s"'`「『]+/, '').replace(/[\s"'`」』]+$/, '').trim();
+            return text || fallback;
+        }
+        catch (e) {
+            this.log.warn({ task: task.id, scope: task.scope, ...errorDetails(e as Error) }, '提醒文案生成失败，回退原文');
+            return fallback;
+        }
+    }
+
+    /** 私聊提醒配一条语音；群聊不配，避免刷屏 */
+    private async sendReminderVoice(task: ScheduledTask, text: string, signal: AbortSignal): Promise<boolean> {
+        try {
+            if (!this.cfg.tasks.reminderVoice || !this.speech || !this.personaMgr)
+                return false;
+            if (!task.scope.startsWith('private:') || !this.cfg.speech.tts.enabled)
+                return false;
+            const persona = this.personaMgr.resolve(task.scope, task.owner_id).persona;
+            if (!persona.voice.enabled)
+                return false;
+            // replyVoice 只用到 msg.scope，这里给个最小可用的替身
+            const fake = { scope: task.scope, scopeType: 'private', selfId: 0, segments: [], text: '', userId: task.owner_id } as unknown as InboundMessage;
+            return await this.speech.replyVoice(this.api, fake, text, persona, signal, this.cfg, false);
+        }
+        catch (e) {
+            this.log.warn({ task: task.id, scope: task.scope, ...errorDetails(e as Error) }, '提醒语音发送失败，文字已送达');
+            return false;
+        }
+    }
+
     list(scope?: string, owner?: number) { let sql = 'SELECT * FROM scheduled_tasks WHERE 1=1'; const args: Array<string | number> = []; if (scope) {
         sql += ' AND scope=?';
         args.push(scope);
@@ -199,7 +274,7 @@ export class ScheduledTasks {
                     this.finish(task, 'expired', now, '过期任务未补发');
                     continue;
                 }
-                const text = task.kind === 'reminder' ? '⏰ 提醒：' + task.text : await this.digest(task.scope, task.due_at, this.controller.signal);
+                const text = task.kind === 'reminder' ? await this.phraseReminder(task, this.controller.signal) : await this.digest(task.scope, task.due_at, this.controller.signal);
                 this.controller.signal.throwIfAborted();
                 this.gate(task.scope, task.owner_id);
                 if (!this.ready())
@@ -213,6 +288,9 @@ export class ScheduledTasks {
                 this.log.info({task:task.id,scope:task.scope,kind:task.kind,messageId:sent.message_id}, '定时任务已确认投递');
                 this.store.touchSession(task.scope, task.scope.startsWith('group:') ? 'group' : 'private', Number(task.scope.split(':')[1]), task.scope);
                 this.store.addMessage({ scope: task.scope, userId: 0, role: 'assistant', content: text, messageId: sent.message_id, senderName: '定时任务' });
+                // 语音是附加效果：文字已经确认送达，语音失败不影响任务状态
+                if (task.kind === 'reminder')
+                    await this.sendReminderVoice(task, text, this.controller.signal);
             }
             catch (e) {
                 const error = e as Error;

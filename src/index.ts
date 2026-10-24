@@ -255,7 +255,7 @@ async function main(): Promise<void> {
   // ==================== 9. OneBot ====================
   const napcat = new OneBotClient(app.napcat, getLogger('napcat'));
   const speech=new SpeechService(app,providersMgr,getLogger('speech'));pipeline.attachSpeech(speech);
-  const tasks=new ScheduledTasks(app,store,providersMgr,napcat.api,trigger,getLogger('tasks'),()=>napcat.apiReady);
+  const tasks=new ScheduledTasks(app,store,providersMgr,napcat.api,trigger,getLogger('tasks'),()=>napcat.apiReady,personaMgr,speech);
   const commands = new CommandHandler(app, store, personaMgr, getLogger('cmd'),tasks);tasks.start();
   const admission = new InboundAdmission(trigger);
   const pokeEvents = new EventDeduper(1024, 2000);
